@@ -1,6 +1,6 @@
 # Système de Trading Financier Autonome avec JADE
 
-## 1. Description du 
+## 1. Description du système
 
 Un écosystème de trading où des agents autonomes négocient des actions sur un marché virtuel. Chaque agent trader a sa propre stratégie, ses croyances sur le marché et ses objectifs financiers.
 
