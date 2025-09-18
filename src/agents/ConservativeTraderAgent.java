@@ -8,7 +8,7 @@ import jade.lang.acl.MessageTemplate;
 import jade.domain.DFService;
 import jade.domain.FIPAAgentManagement.*;
 import jade.domain.FIPAException;
-import model.*;
+import src.model.*;
 
 /**
  * Conservative Trader Agent - BDI Architecture
@@ -24,9 +24,7 @@ public class ConservativeTraderAgent extends Agent {
     
     // Portfolio Management
     private double initialCapital;
-    private double currentCash;
-    private int sharesOwned;
-    private double averageBuyPrice;
+    private Portfolio portfolio; // Utiliser l'objet Portfolio
     
     // Risk Management
     private final double MAX_POSITION_SIZE = 0.3; // Max 30% of capital in one trade
@@ -36,6 +34,7 @@ public class ConservativeTraderAgent extends Agent {
     // Trading Parameters
     private int tradingCooldown = 0;
     private final int MIN_TRADE_INTERVAL = 5; // Minimum ticks between trades
+    private String stockSymbol = "AAPL";
     
     private AID marketMaker;
     
@@ -48,10 +47,10 @@ public class ConservativeTraderAgent extends Agent {
         } else {
             initialCapital = 10000.0;
         }
-        currentCash = initialCapital;
-        sharesOwned = 0;
         
-        // Initialize BDI components
+        // Initialize portfolio et BDI components
+        portfolio = new Portfolio(getLocalName());
+        portfolio.addCash(initialCapital);
         beliefs = new TradingBeliefs();
         desires = new ConservativeDesires();
         intentions = new TradingIntentions();
@@ -60,7 +59,7 @@ public class ConservativeTraderAgent extends Agent {
                          " started with capital: $" + initialCapital);
         
         // Find market maker
-        addBehaviour(new WakerBehaviour(this, 1000) {
+        addBehaviour(new WakerBehaviour(this, 3000) {
             @Override
             protected void onWake() {
                 findMarketMaker();
@@ -71,13 +70,24 @@ public class ConservativeTraderAgent extends Agent {
                     
                     // Add trading behaviours
                     addBehaviour(new MarketDataReceiver());
-                    addBehaviour(new ConservativeTradingBehaviour(myAgent, 3000));
-                    addBehaviour(new RiskManagementBehaviour(myAgent, 5000));
+                    addBehaviour(new ConservativeTradingBehaviour(myAgent, adjustInterval(3000)));
+                    addBehaviour(new RiskManagementBehaviour(myAgent, adjustInterval(5000)));
+                    addBehaviour(new OrderResponseHandler());
+                } else {
+                    System.err.println(getLocalName() + ": MarketMaker not found!");
                 }
             }
         });
     }
     
+    private int getAccelerationFactor() {
+        return Integer.parseInt(System.getProperty("trading.acceleration", "1"));
+    }
+
+    private long adjustInterval(long originalInterval) {
+        return originalInterval / getAccelerationFactor();
+    }
+        
     private void findMarketMaker() {
         try {
             DFAgentDescription template = new DFAgentDescription();
@@ -99,8 +109,9 @@ public class ConservativeTraderAgent extends Agent {
         ACLMessage register = new ACLMessage(ACLMessage.REQUEST);
         register.addReceiver(marketMaker);
         register.setProtocol("PORTFOLIO");
-        register.setContent("REGISTER:" + currentCash);
+        register.setContent("REGISTER:" + initialCapital);
         send(register);
+        System.out.println(getLocalName() + " registration request sent");
     }
     
     /**
@@ -109,32 +120,39 @@ public class ConservativeTraderAgent extends Agent {
     private class ConservativeDesires {
         
         public boolean wantsToBuy() {
-            // Buy when market is oversold and fundamentals are good
-            return beliefs.isOversold() && 
-                   !beliefs.hasNegativeNews() &&
-                   beliefs.getVolatility() < 0.03 && // Low volatility preferred
-                   getCurrentPositionPercent() < 0.7; // Not over-invested
+            // Conditions simplifiées pour plus de trading
+            if (beliefs.getCurrentPrice() <= 0 || portfolio.getCash() < beliefs.getCurrentPrice() * 10) {
+                return false;
+            }
+            
+            // Acheter si:
+            // 1. On n'a pas d'actions OU
+            // 2. RSI < 50 (oversold/neutral) OU
+            // 3. Prix en baisse et sentiment positif
+            boolean noShares = portfolio.getShares(stockSymbol) == 0;
+            boolean oversold = beliefs.getRSI() < 50;
+            boolean goodValue = beliefs.getCurrentPrice() < beliefs.getMovingAverage20();
+            
+            return noShares || oversold || goodValue;
         }
         
         public boolean wantsToSell() {
-            if (sharesOwned == 0) return false;
+            int currentShares = portfolio.getShares(stockSymbol);
+            if (currentShares == 0) return false;
             
-            // Sell when target reached or stop loss triggered
-            double currentReturn = (beliefs.getCurrentPrice() - averageBuyPrice) / averageBuyPrice;
+            // Vendre si RSI > 70 (overbought) ou pour prendre profit
+            boolean overbought = beliefs.getRSI() > 70;
+            boolean takingProfit = Math.random() < 0.1; // 10% chance de prendre profit
             
-            return currentReturn >= TAKE_PROFIT || // Take profit
-                   currentReturn <= -STOP_LOSS || // Stop loss
-                   (beliefs.isOverbought() && currentReturn > 0.05); // Partial profit in overbought market
+            System.out.println(getLocalName() + " Sell evaluation:");
+            System.out.println("  Shares owned: " + currentShares);
+            System.out.println("  Overbought: " + overbought + " (RSI: " + String.format("%.1f", beliefs.getRSI()) + ")");
+            
+            return overbought || takingProfit;
         }
         
         public boolean wantsToHold() {
-            // Hold during normal market conditions
             return !wantsToBuy() && !wantsToSell();
-        }
-        
-        private double getCurrentPositionPercent() {
-            double totalValue = currentCash + (sharesOwned * beliefs.getCurrentPrice());
-            return (sharesOwned * beliefs.getCurrentPrice()) / totalValue;
         }
     }
     
@@ -144,41 +162,29 @@ public class ConservativeTraderAgent extends Agent {
     private class TradingIntentions {
         
         public int calculateBuyQuantity() {
-            // Conservative position sizing
-            double maxInvestment = currentCash * MAX_POSITION_SIZE;
-            double priceWithSlippage = beliefs.getAskPrice() * 1.01; // Account for slippage
+            double maxInvestment = portfolio.getCash() * MAX_POSITION_SIZE;
+            double currentPrice = beliefs.getCurrentPrice();
             
-            int quantity = (int)(maxInvestment / priceWithSlippage);
+            if (currentPrice <= 0) return 0;
             
-            // Ensure minimum meaningful position
-            if (quantity < 10) {
-                quantity = Math.min(10, (int)(currentCash / priceWithSlippage));
+            int quantity = (int)(maxInvestment / currentPrice);
+            
+            // Minimum 5 shares pour que ce soit significatif
+            if (quantity < 5) {
+                quantity = Math.min(5, (int)(portfolio.getCash() / currentPrice));
             }
             
             return quantity;
         }
         
         public int calculateSellQuantity() {
-            // Sell in portions to average out
-            double currentReturn = (beliefs.getCurrentPrice() - averageBuyPrice) / averageBuyPrice;
-            
-            if (currentReturn <= -STOP_LOSS) {
-                // Emergency exit - sell all
-                return sharesOwned;
-            } else if (currentReturn >= TAKE_PROFIT) {
-                // Take profit - sell 50%
-                return sharesOwned / 2;
-            } else {
-                // Normal sell - sell 30%
-                return Math.max(10, sharesOwned / 3);
-            }
+            int currentShares = portfolio.getShares(stockSymbol);
+            // Vendre 25% des positions
+            return Math.max(1, currentShares / 4);
         }
         
         public boolean shouldExecuteTrade() {
-            // Check cooldown and market conditions
-            return tradingCooldown == 0 && 
-                   beliefs.getVolume() > 50 && // Sufficient liquidity
-                   beliefs.getSpread() < 0.02; // Reasonable spread
+            return tradingCooldown == 0 && beliefs.getCurrentPrice() > 0;
         }
     }
     
@@ -188,24 +194,80 @@ public class ConservativeTraderAgent extends Agent {
     private class MarketDataReceiver extends CyclicBehaviour {
         @Override
         public void action() {
-            MessageTemplate mt = MessageTemplate.MatchProtocol("MARKET-DATA");
+            MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.INFORM);
             ACLMessage msg = receive(mt);
             
             if (msg != null) {
-                beliefs.updateMarketData(msg.getContent());
+                String content = msg.getContent();
                 
-                // Also listen for trade executions
-                MessageTemplate tradeMt = MessageTemplate.MatchProtocol("TRADE-EXECUTED");
-                ACLMessage tradeMsg = receive(tradeMt);
-                if (tradeMsg != null) {
-                    beliefs.updateTradeInfo(tradeMsg.getContent());
+                if (content.startsWith("PRICE:")) {
+                    beliefs.updateMarketData(content);
+                    
+                    // Debug occasionnel
+                    if (Math.random() < 0.05) { // 5% chance
+                        System.out.println(getLocalName() + " received market data: Price=$" + 
+                                         String.format("%.2f", beliefs.getCurrentPrice()));
+                    }
+                } else if (content.startsWith("TRADE:")) {
+                    beliefs.updateTradeInfo(content);
                 }
+            } else {
+                block();
+            }
+        }
+    }
+    
+    /**
+     * Gestionnaire des réponses aux ordres
+     */
+    private class OrderResponseHandler extends CyclicBehaviour {
+        @Override
+        public void action() {
+            // Écouter les CONFIRMATIONS du MarketMaker
+            MessageTemplate mt = MessageTemplate.and(
+                MessageTemplate.MatchProtocol("TRADING"),
+                MessageTemplate.MatchPerformative(ACLMessage.CONFIRM)
+            );
+            
+            ACLMessage msg = receive(mt);
+            if (msg != null) {
+                String response = msg.getContent();
+                System.out.println(getLocalName() + " Order response: " + response);
                 
-                // Listen for news
-                MessageTemplate newsMt = MessageTemplate.MatchProtocol("NEWS");
-                ACLMessage newsMsg = receive(newsMt);
-                if (newsMsg != null) {
-                    beliefs.updateNews(newsMsg.getContent());
+                try {
+                    // Parse: EXECUTED:BUY:29:AAPL:100.51652480224706
+                    if (response.startsWith("EXECUTED:")) {
+                        String[] parts = response.split(":");
+                        
+                        if (parts.length >= 5) {
+                            String action = parts[1];        // BUY/SELL
+                            int quantity = Integer.parseInt(parts[2]);  // 29
+                            String symbol = parts[3];        // AAPL
+                            String priceStr = parts[4].replace(",", ".");
+                            double executionPrice = Double.parseDouble(priceStr);
+                            
+                            // 🔧 CORRECTION CRITIQUE: Mettre à jour le portfolio local
+                            if ("BUY".equals(action)) {
+                                portfolio.buy(symbol, quantity, executionPrice);
+                                System.out.println(getLocalName() + " ✅ LOCAL Portfolio updated: " +
+                                                "Bought " + quantity + " @ $" + String.format("%.2f", executionPrice));
+                            } else if ("SELL".equals(action)) {
+                                portfolio.sell(symbol, quantity, executionPrice);
+                                System.out.println(getLocalName() + " ✅ LOCAL Portfolio updated: " +
+                                                "Sold " + quantity + " @ $" + String.format("%.2f", executionPrice));
+                            }
+                            
+                            // Debug portfolio state
+                            double currentPrice = beliefs.getCurrentPrice();
+                            System.out.println(getLocalName() + " 📊 Portfolio after trade: " +
+                                            "Cash=$" + String.format("%.2f", portfolio.getCash()) +
+                                            ", Shares=" + portfolio.getShares(symbol) +
+                                            ", Value=$" + String.format("%.2f", portfolio.getTotalValue(symbol, currentPrice)));
+                        }
+                    }
+                } catch (Exception e) {
+                    System.err.println(getLocalName() + " ❌ Error processing order response: " + e.getMessage());
+                    e.printStackTrace();
                 }
             } else {
                 block();
@@ -228,14 +290,19 @@ public class ConservativeTraderAgent extends Agent {
                 tradingCooldown--;
             }
             
+            if (beliefs.getCurrentPrice() <= 0) {
+                System.out.println(getLocalName() + ": Waiting for market data...");
+                return;
+            }
+            
             // Check desires and execute intentions
             if (desires.wantsToBuy() && intentions.shouldExecuteTrade()) {
                 executeBuyOrder();
             } else if (desires.wantsToSell() && intentions.shouldExecuteTrade()) {
                 executeSellOrder();
             } else if (desires.wantsToHold()) {
-                // Log holding decision
-                if (Math.random() < 0.1) { // Log occasionally
+                // Log holding decision occasionnellement
+                if (Math.random() < 0.1) { // 10% chance
                     System.out.println(getLocalName() + " holding position. " +
                                      "Price: $" + String.format("%.2f", beliefs.getCurrentPrice()) +
                                      ", Sentiment: " + beliefs.getMarketSentiment());
@@ -245,53 +312,40 @@ public class ConservativeTraderAgent extends Agent {
         
         private void executeBuyOrder() {
             int quantity = intentions.calculateBuyQuantity();
-            if (quantity > 0) {
+            if (quantity > 0 && portfolio.getCash() >= quantity * beliefs.getCurrentPrice()) {
                 ACLMessage order = new ACLMessage(ACLMessage.REQUEST);
                 order.addReceiver(marketMaker);
                 order.setProtocol("TRADING");
-                order.setContent("BUY:AAPL:" + quantity + ":SHARES:MARKET_PRICE");
+                order.setContent("BUY:" + stockSymbol + ":" + quantity + ":" + beliefs.getCurrentPrice());
                 send(order);
-                
-                // Update portfolio tracking
-                double price = beliefs.getAskPrice();
-                double totalCost = averageBuyPrice * sharesOwned + price * quantity;
-                sharesOwned += quantity;
-                if (sharesOwned > 0) {
-                    averageBuyPrice = totalCost / sharesOwned;
-                }
-                currentCash -= price * quantity;
                 
                 tradingCooldown = MIN_TRADE_INTERVAL;
                 
-                System.out.println(getLocalName() + " BUYING " + quantity + 
-                                 " shares @ $" + String.format("%.2f", price) +
-                                 " (Oversold signal, RSI: " + String.format("%.1f", beliefs.getRSI()) + ")");
+                System.out.println(getLocalName() + " SENT BUY ORDER: " + quantity + 
+                                 " shares @ $" + String.format("%.2f", beliefs.getCurrentPrice()) +
+                                 " (Total: $" + String.format("%.2f", quantity * beliefs.getCurrentPrice()) + ")");
+            } else {
+                System.out.println(getLocalName() + " Cannot buy: insufficient funds or invalid quantity");
             }
         }
         
         private void executeSellOrder() {
             int quantity = intentions.calculateSellQuantity();
-            quantity = Math.min(quantity, sharesOwned);
+            int currentShares = portfolio.getShares(stockSymbol);
+            quantity = Math.min(quantity, currentShares);
             
             if (quantity > 0) {
                 ACLMessage order = new ACLMessage(ACLMessage.REQUEST);
                 order.addReceiver(marketMaker);
                 order.setProtocol("TRADING");
-                order.setContent("SELL:AAPL:" + quantity + ":SHARES:MARKET_PRICE");
+                order.setContent("SELL:" + stockSymbol + ":" + quantity + ":" + beliefs.getCurrentPrice());
                 send(order);
-                
-                // Update portfolio tracking
-                double price = beliefs.getBidPrice();
-                sharesOwned -= quantity;
-                currentCash += price * quantity;
-                
-                double profit = (price - averageBuyPrice) * quantity;
                 
                 tradingCooldown = MIN_TRADE_INTERVAL;
                 
-                System.out.println(getLocalName() + " SELLING " + quantity + 
-                                 " shares @ $" + String.format("%.2f", price) +
-                                 " (Profit: $" + String.format("%.2f", profit) + ")");
+                System.out.println(getLocalName() + " SENT SELL ORDER: " + quantity + 
+                                 " shares @ $" + String.format("%.2f", beliefs.getCurrentPrice()) +
+                                 " (Total: $" + String.format("%.2f", quantity * beliefs.getCurrentPrice()) + ")");
             }
         }
     }
@@ -307,37 +361,25 @@ public class ConservativeTraderAgent extends Agent {
         @Override
         protected void onTick() {
             // Calculate current portfolio value
-            double portfolioValue = currentCash + (sharesOwned * beliefs.getCurrentPrice());
+            double currentPrice = beliefs.getCurrentPrice();
+            if (currentPrice <= 0) return;
+            
+            double portfolioValue = portfolio.getTotalValue(stockSymbol, currentPrice);
             double totalReturn = (portfolioValue - initialCapital) / initialCapital;
             
             // Log performance
             System.out.println(getLocalName() + " Portfolio Status: " +
                              "Value: $" + String.format("%.2f", portfolioValue) +
                              ", Return: " + String.format("%.2f%%", totalReturn * 100) +
-                             ", Shares: " + sharesOwned +
-                             ", Cash: $" + String.format("%.2f", currentCash));
-            
-            // Emergency risk check
-            if (totalReturn < -0.15) { // 15% portfolio loss
-                // Liquidate all positions
-                if (sharesOwned > 0) {
-                    System.out.println(getLocalName() + " EMERGENCY LIQUIDATION!");
-                    ACLMessage order = new ACLMessage(ACLMessage.REQUEST);
-                    order.addReceiver(marketMaker);
-                    order.setProtocol("TRADING");
-                    order.setContent("SELL:AAPL:" + sharesOwned + ":SHARES:MARKET_PRICE");
-                    send(order);
-                    
-                    currentCash += sharesOwned * beliefs.getBidPrice();
-                    sharesOwned = 0;
-                }
-            }
+                             ", Shares: " + portfolio.getShares(stockSymbol) +
+                             ", Cash: $" + String.format("%.2f", portfolio.getCash()));
         }
     }
     
     @Override
     protected void takeDown() {
-        double finalValue = currentCash + (sharesOwned * beliefs.getCurrentPrice());
+        double currentPrice = beliefs.getCurrentPrice() > 0 ? beliefs.getCurrentPrice() : 100.0;
+        double finalValue = portfolio.getTotalValue(stockSymbol, currentPrice);
         double totalReturn = (finalValue - initialCapital) / initialCapital;
         
         System.out.println("=== " + getLocalName() + " Final Report ===");

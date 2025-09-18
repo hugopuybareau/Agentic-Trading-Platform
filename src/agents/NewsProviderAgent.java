@@ -8,9 +8,10 @@ import jade.domain.DFService;
 import jade.domain.FIPAAgentManagement.*;
 import jade.domain.FIPAException;
 import java.util.*;
+import src.model.*;
 
 /**
- * News Provider Agent
+ * News Provider Agent  
  * Generates market events and news that affect trading decisions
  * Implements the 5-phase market scenario: Calm -> Trend -> Bubble -> Crash -> Recovery
  */
@@ -61,12 +62,21 @@ public class NewsProviderAgent extends Agent {
                 findSubscribers();
                 
                 // Add news generation behaviours
-                addBehaviour(new PhaseControlBehaviour(myAgent, 5000)); // Check phase every 5 seconds
-                addBehaviour(new NewsGenerationBehaviour(myAgent, 8000)); // Generate news every 8 seconds
-                addBehaviour(new SpecialEventBehaviour(myAgent, 15000)); // Special events
+                addBehaviour(new PhaseControlBehaviour(myAgent, adjustInterval(5000))); // Check phase every 5 seconds
+                addBehaviour(new NewsGenerationBehaviour(myAgent, adjustInterval(8000))); // Generate news every 8 seconds
+                addBehaviour(new SpecialEventBehaviour(myAgent, adjustInterval(15000))); // Special events
             }
         });
     }
+
+    private int getAccelerationFactor() {
+        return Integer.parseInt(System.getProperty("trading.acceleration", "1"));
+    }
+
+    private long adjustInterval(long originalInterval) {
+        return originalInterval / getAccelerationFactor();
+    }
+        
     
     private void registerService() {
         DFAgentDescription dfd = new DFAgentDescription();

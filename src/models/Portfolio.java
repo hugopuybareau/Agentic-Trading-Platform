@@ -1,4 +1,4 @@
-package model;
+package src.model;
 
 import java.util.*;
 
@@ -42,6 +42,14 @@ public class Portfolio {
             return true;
         }
         return false;
+    }
+
+    /**
+     * Calcule la valeur totale du portfolio (cash + actions)
+     */
+    public double getTotalValue(String symbol, double currentPrice) {
+        double stockValue = getShares(symbol) * currentPrice;
+        return cash + stockValue;
     }
     
     /**
@@ -130,6 +138,64 @@ public class Portfolio {
                .append(String.format("%.2f", totalCommissions)).append("\n");
         
         return summary.toString();
+    }
+    // Ajoutez ces méthodes à la classe Portfolio :
+
+    /**
+     * Buy shares - deduct cash and add shares
+     */
+    public boolean buy(String symbol, int quantity, double price) {
+        double totalCost = quantity * price;
+        double commission = quantity * 0.01; // $0.01 per share
+        double totalWithCommission = totalCost + commission;
+        
+        if (cash >= totalWithCommission) {
+            cash -= totalWithCommission;
+            addShares(symbol, quantity);
+            
+            // Record transaction
+            Transaction transaction = new Transaction("BUY", symbol, quantity, price);
+            recordTransaction(transaction);
+            
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Sell shares - add cash and remove shares
+     */
+    public boolean sell(String symbol, int quantity, double price) {
+        if (removeShares(symbol, quantity)) {
+            double totalReceived = quantity * price;
+            double commission = quantity * 0.01; // $0.01 per share
+            double netReceived = totalReceived - commission;
+            
+            cash += netReceived;
+            
+            // Record transaction
+            Transaction transaction = new Transaction("SELL", symbol, quantity, price);
+            recordTransaction(transaction);
+            
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Check if we can afford to buy
+     */
+    public boolean canAfford(String symbol, int quantity, double price) {
+        double totalCost = quantity * price;
+        double commission = quantity * 0.01;
+        return cash >= (totalCost + commission);
+    }
+
+    /**
+     * Get available cash for trading
+     */
+    public double getAvailableCash() {
+        return cash;
     }
     
     // Getters

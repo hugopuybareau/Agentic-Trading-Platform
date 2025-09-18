@@ -8,7 +8,7 @@ import jade.lang.acl.MessageTemplate;
 import jade.domain.DFService;
 import jade.domain.FIPAAgentManagement.*;
 import jade.domain.FIPAException;
-import model.*;
+import src.model.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -22,17 +22,22 @@ public class MarketMakerAgent extends Agent {
     private double currentPrice;
     private double bidPrice;
     private double askPrice;
-    private double spread = 0.01; // 1% spread
+    private double spread = 0.001; // 0.1% spread
     private OrderBook orderBook;
     private Map<AID, Portfolio> portfolios;
+    private List<AID> registeredTraders;
     private List<Trade> tradeHistory;
     private MarketStatistics stats;
     private int totalVolume = 0;
     private double volatility = 0.02; // 2% base volatility
     
+
     @Override
     protected void setup() {
+        // 🔧 1. Initialiser les paramètres avec l'accélération
         Object[] args = getArguments();
+        int accelerationFactor = getAccelerationFactor();
+        
         if (args != null && args.length >= 2) {
             stockSymbol = (String) args[0];
             currentPrice = (Double) args[1];
@@ -41,24 +46,53 @@ public class MarketMakerAgent extends Agent {
             currentPrice = 100.0;
         }
         
+        // 🔧 4. Initialiser les prix
         bidPrice = currentPrice * (1 - spread/2);
         askPrice = currentPrice * (1 + spread/2);
         
+        // 🔧 5. Initialiser les structures de données
         orderBook = new OrderBook();
         portfolios = new ConcurrentHashMap<>();
+        registeredTraders = new ArrayList<>();
         tradeHistory = new ArrayList<>();
         stats = new MarketStatistics();
         
-        // Register with DF
+        // 🔧 7. Calculer les intervals avec accélération
+        long baseQuoteInterval = 3000;  // 3 secondes de base
+        long baseMakingInterval = 5000; // 5 secondes de base
+        
+        long quoteInterval = adjustInterval(baseQuoteInterval);
+        long makingInterval = adjustInterval(baseMakingInterval);
+                
         registerService();
         
-        // Add behaviours
-        addBehaviour(new PriceQuotationBehaviour(this, 1000)); // Quote every second
-        addBehaviour(new OrderProcessingBehaviour());
-        addBehaviour(new MarketMakingBehaviour(this, 2000)); // Adjust spreads
-        addBehaviour(new PortfolioManagementBehaviour());
+        addBehaviour(new PortfolioManagementBehaviour()); // Immédiat
+        addBehaviour(new OrderProcessingBehaviour());     // Immédiat
         
-        System.out.println("MarketMaker started: " + stockSymbol + " @ $" + currentPrice);
+        // 🔧 10. Démarrer les behaviours périodiques après un délai
+        addBehaviour(new WakerBehaviour(this, 1000) {
+            @Override
+            protected void onWake() {
+                // Ajouter les behaviours périodiques
+                addBehaviour(new PriceQuotationBehaviour(myAgent, quoteInterval));
+                addBehaviour(new MarketMakingBehaviour(myAgent, makingInterval));
+                
+                System.out.println("MarketMaker behaviours started");
+                
+                // 🔧 11. Premier broadcast immédiat
+                broadcastMarketData();
+            }
+        });
+        
+        System.out.println("MarketMaker setup complete - Ready for traders!");
+    }
+
+    private int getAccelerationFactor() {
+        return Integer.parseInt(System.getProperty("trading.acceleration", "1"));
+    }
+
+    private long adjustInterval(long originalInterval) {
+        return originalInterval / getAccelerationFactor();
     }
     
     private void registerService() {
@@ -75,6 +109,31 @@ public class MarketMakerAgent extends Agent {
             e.printStackTrace();
         }
     }
+
+    // Méthode pour diffuser les données de marché
+    private void broadcastMarketData() {
+        String marketData = String.format(
+            "PRICE:%s:%.2f:BID:%.2f:ASK:%.2f:VOLUME:%d:VOLATILITY:%.4f",
+            stockSymbol, currentPrice, bidPrice, askPrice, totalVolume, volatility
+        );
+        
+        System.out.println("Broadcasting: " + marketData);
+        
+        ACLMessage quote = new ACLMessage(ACLMessage.INFORM);
+        quote.setProtocol("MARKET-DATA");
+        quote.setContent(marketData);
+        
+        if (registeredTraders.isEmpty()) {
+            System.out.println("No traders registered yet");
+        } else {
+            for (AID trader : registeredTraders) {
+                quote.addReceiver(trader);
+                System.out.println("Sending to: " + trader.getLocalName());
+            }
+            send(quote);
+            System.out.println("Market data sent to " + registeredTraders.size() + " traders");
+        }
+    }
     
     /**
      * Behaviour for broadcasting price quotations
@@ -86,23 +145,8 @@ public class MarketMakerAgent extends Agent {
         
         @Override
         protected void onTick() {
-            // Update prices based on order imbalance
             updatePrices();
-            
-            // Broadcast market data
-            ACLMessage quote = new ACLMessage(ACLMessage.INFORM);
-            quote.setProtocol("MARKET-DATA");
-            quote.setContent(String.format(
-                "PRICE:%s:%.2f:BID:%.2f:ASK:%.2f:VOLUME:%d:VOLATILITY:%.4f",
-                stockSymbol, currentPrice, bidPrice, askPrice, totalVolume, volatility
-            ));
-            
-            // Send to all registered traders
-            for (AID trader : portfolios.keySet()) {
-                quote.addReceiver(trader);
-            }
-            
-            send(quote);
+            broadcastMarketData();
         }
         
         private void updatePrices() {
@@ -124,7 +168,7 @@ public class MarketMakerAgent extends Agent {
             currentPrice += randomWalk;
             
             // Update bid/ask
-            double dynamicSpread = spread * (1 + volatility * 5); // Wider spread in volatile markets
+            double dynamicSpread = spread * (1 + volatility * 5);
             bidPrice = currentPrice * (1 - dynamicSpread/2);
             askPrice = currentPrice * (1 + dynamicSpread/2);
             
@@ -147,92 +191,218 @@ public class MarketMakerAgent extends Agent {
             
             ACLMessage msg = receive(mt);
             if (msg != null) {
-                processOrder(msg);
+                String orderContent = msg.getContent();
+                AID trader = msg.getSender();
+                
+                System.out.println("MarketMaker received order: " + orderContent + " from " + trader.getLocalName());
+                
+                processOrder(trader, orderContent);
             } else {
                 block();
             }
         }
         
-        private void processOrder(ACLMessage msg) {
-            String content = msg.getContent();
-            AID trader = msg.getSender();
-            
-            // Initialize portfolio if new trader
-            if (!portfolios.containsKey(trader)) {
-                portfolios.put(trader, new Portfolio(trader.getLocalName()));
+        private void processOrder(AID trader, String orderStr) {
+            try {
+                System.out.println("Processing order: " + orderStr);
+                
+                String[] parts = orderStr.split(":");
+                System.out.println("Order parts: " + Arrays.toString(parts));
+                
+                if (parts.length < 4) {
+                    System.err.println("Invalid order format. Expected 4 parts, got " + parts.length);
+                    sendOrderResponse(trader, "REJECTED:Invalid format");
+                    return;
+                }
+                
+                String action = parts[0];      // BUY ou SELL
+                String symbol = parts[1];      // AAPL
+                String quantityStr = parts[2]; // 29
+                String priceStr = parts[3];    // 100,03
+                
+                // Remplacer les virgules par des points pour le parsing
+                priceStr = priceStr.replace(",", ".");
+                
+                int quantity = Integer.parseInt(quantityStr);
+                double orderPrice = Double.parseDouble(priceStr);
+                
+                System.out.println("Parsed order: " + action + " " + quantity + " " + symbol + " @ $" + orderPrice);
+                
+                // Traiter l'ordre
+                if ("BUY".equals(action)) {
+                    executeBuyOrder(trader, symbol, quantity, orderPrice);
+                } else if ("SELL".equals(action)) {
+                    executeSellOrder(trader, symbol, quantity, orderPrice);
+                } else {
+                    System.err.println("Unknown order action: " + action);
+                    sendOrderResponse(trader, "REJECTED:Unknown action");
+                }
+                
+            } catch (NumberFormatException e) {
+                System.err.println("Error parsing order numbers: " + e.getMessage());
+                sendOrderResponse(trader, "REJECTED:Invalid number format");
+            } catch (Exception e) {
+                System.err.println("Error processing order: " + e.getMessage());
+                e.printStackTrace();
+                sendOrderResponse(trader, "REJECTED:Processing error");
             }
-            
-            String[] parts = content.split(":");
-            String orderType = parts[0]; // BUY or SELL
-            String symbol = parts[1];
-            int quantity = Integer.parseInt(parts[2]);
-            String priceType = parts[4]; // MARKET_PRICE or LIMIT
-            
-            Order order = new Order(trader, orderType, symbol, quantity, 
-                                  "MARKET_PRICE".equals(priceType) ? 
-                                  (orderType.equals("BUY") ? askPrice : bidPrice) : 
-                                  Double.parseDouble(parts[5]));
-            
-            // Try to execute order
-            boolean executed = executeOrder(order);
-            
-            // Send confirmation
-            ACLMessage reply = msg.createReply();
-            if (executed) {
-                reply.setPerformative(ACLMessage.CONFIRM);
-                reply.setContent("EXECUTED:" + order.toString());
+        }
+        
+        private void executeBuyOrder(AID trader, String symbol, int quantity, double orderPrice) {
+            try {
+                Portfolio portfolio = portfolios.get(trader);
+                if (portfolio == null) {
+                    System.err.println("No portfolio found for trader: " + trader.getLocalName());
+                    sendOrderResponse(trader, "REJECTED:No portfolio");
+                    return;
+                }
+                
+                // Utiliser le prix de marché actuel (askPrice pour les achats)
+                double executionPrice = askPrice;
+                double totalCost = quantity * executionPrice;
+                
+                if (portfolio.getCash() < totalCost) {
+                    System.err.println("Insufficient funds for " + trader.getLocalName() + 
+                                     ". Required: $" + String.format("%.2f", totalCost) + 
+                                     ", Available: $" + String.format("%.2f", portfolio.getCash()));
+                    sendOrderResponse(trader, "REJECTED:Insufficient funds");
+                    return;
+                }
+                
+                // Exécuter la transaction
+                portfolio.removeCash(totalCost);
+                portfolio.addShares(symbol, quantity);
+                
+                // Mettre à jour les statistiques
                 totalVolume += quantity;
-            } else {
-                reply.setPerformative(ACLMessage.REFUSE);
-                reply.setContent("REJECTED:Insufficient funds or shares");
+                Trade trade = new Trade(trader.getLocalName(), "BUY", symbol, quantity, executionPrice);
+                tradeHistory.add(trade);
+                
+                // Impact sur le prix
+                double priceImpact = quantity * 0.001; // 0.1% par action
+                currentPrice += priceImpact;
+                bidPrice = currentPrice * (1 - spread/2);
+                askPrice = currentPrice * (1 + spread/2);
+                
+                // Confirmer l'ordre
+                sendOrderResponse(trader, "EXECUTED:BUY:" + quantity + ":" + symbol + ":" + executionPrice);
+                
+                System.out.println("✅ BUY ORDER EXECUTED: " + trader.getLocalName() + 
+                                 " bought " + quantity + " " + symbol + " @ $" + String.format("%.2f", executionPrice) +
+                                 " (Total: $" + String.format("%.2f", totalCost) + ")");
+                System.out.println("   New price: $" + String.format("%.2f", currentPrice) + 
+                                 ", Portfolio cash remaining: $" + String.format("%.2f", portfolio.getCash()));
+                
+                // Diffuser l'information du trade
+                broadcastTradeExecution(trade);
+                
+            } catch (Exception e) {
+                System.err.println("Error executing buy order: " + e.getMessage());
+                e.printStackTrace();
+                sendOrderResponse(trader, "REJECTED:Execution error");
             }
+        }
+        
+        private void executeSellOrder(AID trader, String symbol, int quantity, double orderPrice) {
+            try {
+                Portfolio portfolio = portfolios.get(trader);
+                if (portfolio == null) {
+                    sendOrderResponse(trader, "REJECTED:No portfolio");
+                    return;
+                }
+                
+                if (portfolio.getShares(symbol) < quantity) {
+                    System.err.println("Insufficient shares for " + trader.getLocalName() + 
+                                     ". Required: " + quantity + 
+                                     ", Available: " + portfolio.getShares(symbol));
+                    sendOrderResponse(trader, "REJECTED:Insufficient shares");
+                    return;
+                }
+                
+                // Utiliser le prix de marché actuel (bidPrice pour les ventes)
+                double executionPrice = bidPrice;
+                double totalValue = quantity * executionPrice;
+                
+                // Exécuter la transaction
+                portfolio.removeShares(symbol, quantity);
+                portfolio.addCash(totalValue);
+                
+                // Mettre à jour les statistiques
+                totalVolume += quantity;
+                Trade trade = new Trade(trader.getLocalName(), "SELL", symbol, quantity, executionPrice);
+                tradeHistory.add(trade);
+                
+                // Impact sur le prix (négatif pour les ventes)
+                double priceImpact = quantity * 0.001;
+                currentPrice -= priceImpact;
+                bidPrice = currentPrice * (1 - spread/2);
+                askPrice = currentPrice * (1 + spread/2);
+                
+                // Confirmer l'ordre
+                sendOrderResponse(trader, "EXECUTED:SELL:" + quantity + ":" + symbol + ":" + executionPrice);
+                
+                System.out.println("✅ SELL ORDER EXECUTED: " + trader.getLocalName() + 
+                                 " sold " + quantity + " " + symbol + " @ $" + String.format("%.2f", executionPrice) +
+                                 " (Total: $" + String.format("%.2f", totalValue) + ")");
+                System.out.println("   New price: $" + String.format("%.2f", currentPrice) + 
+                                 ", Portfolio cash: $" + String.format("%.2f", portfolio.getCash()));
+                
+                // Diffuser l'information du trade
+                broadcastTradeExecution(trade);
+                
+            } catch (Exception e) {
+                System.err.println("Error executing sell order: " + e.getMessage());
+                e.printStackTrace();
+                sendOrderResponse(trader, "REJECTED:Execution error");
+            }
+        }
+        
+        private void sendOrderResponse(AID trader, String response) {
+            ACLMessage reply = new ACLMessage(ACLMessage.CONFIRM);
+            reply.setProtocol("TRADING");
+            reply.setContent(response);
+            reply.addReceiver(trader);
             send(reply);
+            
+            System.out.println("Response sent to " + trader.getLocalName() + ": " + response);
         }
         
-        private boolean executeOrder(Order order) {
-            Portfolio portfolio = portfolios.get(order.getTrader());
-            
-            if (order.getType().equals("BUY")) {
-                double cost = order.getQuantity() * order.getPrice();
-                if (portfolio.getCash() >= cost) {
-                    portfolio.addCash(-cost);
-                    portfolio.addShares(order.getSymbol(), order.getQuantity());
-                    
-                    Trade trade = new Trade(order.getTrader().getLocalName(), 
-                                          "BUY", order.getSymbol(), 
-                                          order.getQuantity(), order.getPrice());
-                    tradeHistory.add(trade);
-                    broadcastTrade(trade);
-                    return true;
-                }
-            } else if (order.getType().equals("SELL")) {
-                if (portfolio.getShares(order.getSymbol()) >= order.getQuantity()) {
-                    portfolio.removeShares(order.getSymbol(), order.getQuantity());
-                    portfolio.addCash(order.getQuantity() * order.getPrice());
-                    
-                    Trade trade = new Trade(order.getTrader().getLocalName(), 
-                                          "SELL", order.getSymbol(), 
-                                          order.getQuantity(), order.getPrice());
-                    tradeHistory.add(trade);
-                    broadcastTrade(trade);
-                    return true;
-                }
-            }
-            
-            return false;
+    private void broadcastTradeExecution(Trade trade) {
+        String tradeInfo = String.format("TRADE:%s:%s:%d:%.2f:%s",
+            trade.getTraderName(), trade.getSymbol(), trade.getQuantity(), 
+            trade.getPrice(), trade.getAction());
+        
+        ACLMessage tradeMsg = new ACLMessage(ACLMessage.INFORM);
+        tradeMsg.setProtocol("TRADE-EXECUTED");
+        tradeMsg.setContent(tradeInfo);
+        
+        // Envoyer aux traders
+        for (AID trader : registeredTraders) {
+            tradeMsg.addReceiver(trader);
         }
         
-        private void broadcastTrade(Trade trade) {
-            ACLMessage tradeMsg = new ACLMessage(ACLMessage.INFORM);
-            tradeMsg.setProtocol("TRADE-EXECUTED");
-            tradeMsg.setContent(trade.toString());
+        // 🔧 AJOUT: Envoyer aussi à MarketStatsAgent
+        try {
+            DFAgentDescription template = new DFAgentDescription();
+            ServiceDescription sd = new ServiceDescription();
+            sd.setType("market-stats");
+            template.addServices(sd);
             
-            for (AID trader : portfolios.keySet()) {
-                tradeMsg.addReceiver(trader);
+            DFAgentDescription[] result = DFService.search(myAgent, template);
+            for (DFAgentDescription agent : result) {
+                tradeMsg.addReceiver(agent.getName());
             }
             
-            send(tradeMsg);
+            if (result.length > 0) {
+                System.out.println("Trade also sent to " + result.length + " MarketStats agent(s)");
+            }
+        } catch (FIPAException e) {
+            System.err.println("Error finding MarketStats agent: " + e.getMessage());
         }
+        
+        send(tradeMsg);
+        System.out.println("Trade broadcasted to all traders: " + tradeInfo);
+    }
     }
     
     /**
@@ -252,9 +422,16 @@ public class MarketMakerAgent extends Agent {
                 spread = Math.max(0.005, spread * 0.95); // Tighten spread in calm markets
             }
             
-            // Provide liquidity by placing orders at bid/ask
-            orderBook.addBuyOrder(new Order(getAID(), "BUY", stockSymbol, 10, bidPrice));
-            orderBook.addSellOrder(new Order(getAID(), "SELL", stockSymbol, 10, askPrice));
+            // Update bid/ask prices
+            bidPrice = currentPrice * (1 - spread/2);
+            askPrice = currentPrice * (1 + spread/2);
+            
+            // Provide liquidity (simplified)
+            if (Math.random() < 0.1) { // 10% chance to add liquidity
+                System.out.println("MarketMaker providing liquidity at bid: $" + 
+                                 String.format("%.2f", bidPrice) + 
+                                 ", ask: $" + String.format("%.2f", askPrice));
+            }
         }
     }
     
@@ -280,13 +457,42 @@ public class MarketMakerAgent extends Agent {
                     portfolio.addCash(initialCash);
                     portfolios.put(trader, portfolio);
                     
+                    // Ajouter le trader à la liste des traders enregistrés
+                    if (!registeredTraders.contains(trader)) {
+                        registeredTraders.add(trader);
+                        System.out.println("Trader added to broadcast list: " + trader.getLocalName());
+                    }
+                    
                     ACLMessage reply = msg.createReply();
                     reply.setPerformative(ACLMessage.CONFIRM);
                     reply.setContent("REGISTERED:Success");
                     send(reply);
                     
                     System.out.println("Trader registered: " + trader.getLocalName() + 
-                                     " with $" + initialCash);
+                                     " with $" + String.format("%.2f", initialCash));
+                    
+                    // Envoyer immédiatement les données de marché au nouveau trader
+                    ACLMessage welcome = new ACLMessage(ACLMessage.INFORM);
+                    welcome.setProtocol("MARKET-DATA");
+                    welcome.setContent(String.format(
+                        "PRICE:%s:%.2f:BID:%.2f:ASK:%.2f:VOLUME:%d:VOLATILITY:%.4f",
+                        stockSymbol, currentPrice, bidPrice, askPrice, totalVolume, volatility
+                    ));
+                    welcome.addReceiver(trader);
+                    send(welcome);
+                    System.out.println("Welcome market data sent to: " + trader.getLocalName());
+                }
+                
+                // Gérer les requêtes de statut de portfolio
+                else if (content.equals("STATUS")) {
+                    Portfolio portfolio = portfolios.get(trader);
+                    if (portfolio != null) {
+                        ACLMessage reply = msg.createReply();
+                        reply.setPerformative(ACLMessage.INFORM);
+                        reply.setContent("CASH:" + portfolio.getCash() + 
+                                       ":SHARES:" + portfolio.getShares(stockSymbol));
+                        send(reply);
+                    }
                 }
             } else {
                 block();
@@ -301,6 +507,15 @@ public class MarketMakerAgent extends Agent {
         } catch (FIPAException e) {
             e.printStackTrace();
         }
+        
+        // Rapport final
+        System.out.println("\n=== MARKETMAKER FINAL REPORT ===");
+        System.out.println("Total Volume: " + totalVolume + " shares");
+        System.out.println("Total Trades: " + tradeHistory.size());
+        System.out.println("Final Price: $" + String.format("%.2f", currentPrice));
+        System.out.println("Registered Traders: " + registeredTraders.size());
+        System.out.println("=====================================");
+        
         System.out.println("MarketMaker shutting down. Total volume: " + totalVolume);
     }
 }
