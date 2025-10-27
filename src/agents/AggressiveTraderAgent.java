@@ -11,13 +11,16 @@ import jade.domain.FIPAException;
 import src.model.*;
 import java.util.*;
 
+/**
+ * Agent trader agressif utilisant l'approche BDI.
+ * Strategie: momentum trading, effet de levier, reactions rapides aux news.
+ */
 public class AggressiveTraderAgent extends Agent {
-    // 🔧 REFACTORING: Utiliser Portfolio comme ConservativeTrader
     private Portfolio portfolio;
     private AID marketMaker;
     private TradingBeliefs beliefs;
     
-    // Configuration de trading agressif
+    // Configuration strategie agressive
     private static final double MAX_POSITION_SIZE = 0.5; // 50% max par position
     private static final double MOMENTUM_THRESHOLD = 0.02;
     private static final double LEVERAGE_RATIO = 1.5; // 150% max
@@ -26,21 +29,50 @@ public class AggressiveTraderAgent extends Agent {
     private double initialCapital;
     private double currentPrice; 
     
-    // Statistiques de trading
+    // Statistiques de performance
     private int totalTrades = 0;
     private int consecutiveWins = 0;
     private int consecutiveLosses = 0;
     private double totalProfit = 0.0;
     private List<Double> tradeProfits = new ArrayList<>();
     
-    // État du trading
     private boolean isTrading = false;
     private long lastTradeTime = 0;
     private double borrowedAmount = 0.0;
     
+    // Garde-fous pour eviter le sur-trading
+    private long lastTradeRealMs = 0L;
+    private boolean hasPendingOrder = false;
+    private int tradesThisSession = 0;
+    private final int maxTradesPerSimHour = 20; // Limite par heure simulee
+    private long lastNewsHandled = 0L;
+    private final long newsDebounceMs = simSecondsToRealMs(20);
+
+    // Conversion du temps simule en temps reel
+    private static int accel() {
+        try { 
+            return Integer.parseInt(System.getProperty("trading.acceleration", "1")); 
+        } catch (Exception e) { 
+            return 1; 
+        }
+    }
+    
+    private static long simSecondsToRealMs(int s) { 
+        return (s * 1000L) / Math.max(1, accel()); 
+    }
+    
+    private final long minCooldownRealMs = simSecondsToRealMs(45);
+
+    // Verification si un trade peut etre execute
+    private boolean canTradeNow() {
+        long now = System.currentTimeMillis();
+        return !hasPendingOrder
+            && (now - lastTradeRealMs >= minCooldownRealMs)
+            && (tradesThisSession < maxTradesPerSimHour);
+    }
+
     @Override
     protected void setup() {
-        // Arguments
         Object[] args = getArguments();
         double initialCapital = 15000.0;
         
@@ -53,15 +85,12 @@ public class AggressiveTraderAgent extends Agent {
         System.out.println("Initial Capital: $" + String.format("%.2f", initialCapital));
         System.out.println("Strategy: Aggressive Momentum & Leverage");
         
-        // Créer Portfolio
         portfolio = new Portfolio(getLocalName());
         portfolio.addCash(initialCapital);
         this.initialCapital = initialCapital;
-        
-        // Initialiser beliefs
         beliefs = new TradingBeliefs();
         
-        // 🔧 COPIER la logique de ConservativeTrader
+        // Recherche du MarketMaker et initialisation des comportements
         addBehaviour(new WakerBehaviour(this, 3000) {
             @Override
             protected void onWake() {
@@ -70,24 +99,80 @@ public class AggressiveTraderAgent extends Agent {
                 if (marketMaker != null) {
                     System.out.println(getLocalName() + " found MarketMaker: " + marketMaker.getLocalName());
                     registerWithMarket();
+                    subscribeMarketData();
                     
-                    // Démarrer les behaviours
                     addBehaviour(new MarketDataReceiver());
                     addBehaviour(new OrderResponseHandler());
+                    addBehaviour(new NewsListener());
                     addBehaviour(new MomentumTradingBehaviour(myAgent, adjustInterval(1000)));
                     addBehaviour(new PortfolioStatusBehaviour(myAgent, adjustInterval(5000)));
                     
-                    System.out.println(getLocalName() + " 🚀 Ready for aggressive trading!");
+                    System.out.println(getLocalName() + " Ready for aggressive trading!");
                 } else {
-                    System.err.println(getLocalName() + " ❌ Could not find MarketMaker!");
+                    System.err.println(getLocalName() + " Could not find MarketMaker!");
                 }
             }
         });
         
         System.out.println(getLocalName() + " setup complete");
     }
+
+    private void subscribeMarketData() {
+        try {
+            ACLMessage sub = new ACLMessage(ACLMessage.SUBSCRIBE);
+            sub.setProtocol("MARKET-DATA-SUB");
+            sub.addReceiver(marketMaker);
+            sub.setContent("AAPL");
+            send(sub);
+            System.out.println(getLocalName() + " -> SUBSCRIBE MARKET-DATA");
+        } catch (Exception e) {
+            System.err.println(getLocalName() + " subscribe error: " + e.getMessage());
+        }
+    }
     
-    // 🔧 NOUVEAU: Méthodes Portfolio
+    // Reaction agressive aux actualites financieres
+    private class NewsListener extends CyclicBehaviour {
+        @Override
+        public void action() {
+            MessageTemplate mt = MessageTemplate.MatchProtocol("NEWS");
+            ACLMessage msg = receive(mt);
+            if (msg != null) {
+                String newsContent = msg.getContent();
+                beliefs.updateNewsData(newsContent);
+                System.out.println(getLocalName() + " News received: " + newsContent);
+                reactAggressivelyToNews();
+            } else {
+                block();
+            }
+        }
+
+        private void reactAggressivelyToNews() {
+            long now = System.currentTimeMillis();
+            if (now - lastNewsHandled < newsDebounceMs) return;
+            if (!canTradeNow()) return;
+
+            double newsImpact = beliefs.getNewsImpact();
+
+            if (beliefs.hasPositiveNews()) {
+                if (getCurrentCash() > MIN_CASH_RESERVE) {
+                    int quantity = calculateNewsBasedQuantity() * 2;
+                    executeBuyOrder(quantity, beliefs.getAskPrice());
+                    lastNewsHandled = now;
+                    System.out.println(getLocalName() + " AGGRESSIVE NEWS BUY: " + quantity +
+                            " (impact: " + String.format("%.2f", newsImpact) + ")");
+                }
+            } else if (beliefs.hasNegativeNews()) {
+                if (getSharesOwned() > 0) {
+                    int quantity = Math.min(getSharesOwned(), Math.max(1, getSharesOwned() / 2));
+                    executeSellOrder(quantity, beliefs.getBidPrice());
+                    lastNewsHandled = now;
+                    System.out.println(getLocalName() + " AGGRESSIVE NEWS SELL: " + quantity +
+                            " (impact: " + String.format("%.2f", newsImpact) + ")");
+                }
+            }
+        }
+    }
+    
     private double getCurrentCash() {
         return portfolio.getCash();
     }
@@ -106,158 +191,87 @@ public class AggressiveTraderAgent extends Agent {
         
     private double getPortfolioReturn() {
         double currentValue = getPortfolioValue();
-        return ((currentValue - initialCapital) / initialCapital) * 100; // ✅ Calculer manuellement
+        return ((currentValue - initialCapital) / initialCapital) * 100;
     }
     
+    // Execution d'un ordre d'achat
     private void executeBuyOrder(int quantity, double price) {
+        if (!canTradeNow()) return;
         double totalCost = quantity * price;
-        
-        // ✅ CORRECTION: Utiliser Portfolio.canAfford()
         if (portfolio.canAfford("AAPL", quantity, price)) {
             ACLMessage order = new ACLMessage(ACLMessage.REQUEST);
             order.addReceiver(marketMaker);
             order.setProtocol("TRADING");
             order.setContent("BUY:AAPL:" + quantity + ":" + String.format("%.2f", price));
             send(order);
-            
-            System.out.println(getLocalName() + " 🚀 BUY ORDER: " + quantity + 
-                            " @ $" + String.format("%.2f", price) +
-                            " (Cost: $" + String.format("%.2f", totalCost) + ")");
+            hasPendingOrder = true;
+            System.out.println(getLocalName() + " BUY ORDER: " + quantity +
+                    " @ $" + String.format("%.2f", price) +
+                    " (Cost: $" + String.format("%.2f", totalCost) + ")");
         } else {
-            System.out.println(getLocalName() + " ❌ Insufficient funds: Need $" + 
-                            String.format("%.2f", totalCost) + 
-                            ", Have $" + String.format("%.2f", getCurrentCash()));
+            System.out.println(getLocalName() + " Insufficient funds: Need $" +
+                    String.format("%.2f", totalCost) +
+                    ", Have $" + String.format("%.2f", getCurrentCash()));
         }
     }
     
+    // Execution d'un ordre de vente
     private void executeSellOrder(int quantity, double price) {
-        if (getSharesOwned() >= quantity) {
+        if (!canTradeNow()) return;
+        if (getSharesOwned() >= quantity && quantity > 0) {
             ACLMessage order = new ACLMessage(ACLMessage.REQUEST);
             order.addReceiver(marketMaker);
             order.setProtocol("TRADING");
             order.setContent("SELL:AAPL:" + quantity + ":" + String.format("%.2f", price));
             send(order);
-            
+            hasPendingOrder = true;
             double totalRevenue = quantity * price;
-            System.out.println(getLocalName() + " 💰 SELL ORDER: " + quantity + 
-                            " @ $" + String.format("%.2f", price) +
-                            " (Revenue: $" + String.format("%.2f", totalRevenue) + ")");
+            System.out.println(getLocalName() + " SELL ORDER: " + quantity +
+                    " @ $" + String.format("%.2f", price) +
+                    " (Revenue: $" + String.format("%.2f", totalRevenue) + ")");
         } else {
-            System.out.println(getLocalName() + " ❌ Insufficient shares: Need " + quantity + 
-                            ", Have " + getSharesOwned());
+            System.out.println(getLocalName() + " Insufficient shares: Need " + quantity +
+                    ", Have " + getSharesOwned());
         }
     }
     
-    // 🔧 NOUVEAU: Gestion des réponses de trading
-    private void updatePortfolioAfterTrade(String response) {
-        try {
-            System.out.println(getLocalName() + " 📨 Trade response: " + response);
-            
-            if (response.startsWith("EXECUTED:BUY:")) {
-                String[] parts = response.split(":");
-                if (parts.length >= 5) {
-                    int quantity = Integer.parseInt(parts[2]);
-                    String priceStr = parts[4].replace(",", ".");
-                    double actualPrice = Double.parseDouble(priceStr);
-                    
-                    // ✅ CORRECTION: Utiliser Portfolio.buy()
-                    boolean success = portfolio.buy("AAPL", quantity, actualPrice);
-                    
-                    if (success) {
-                        totalTrades++;
-                        lastTradeTime = System.currentTimeMillis();
-                        
-                        System.out.println(getLocalName() + " ✅ BUY EXECUTED:");
-                        System.out.println("  Quantity: " + quantity + " shares");
-                        System.out.println("  Price: $" + String.format("%.2f", actualPrice));
-                        System.out.println("  Cost: $" + String.format("%.2f", quantity * actualPrice));
-                        System.out.println("  New Cash: $" + String.format("%.2f", getCurrentCash()));
-                        System.out.println("  Total Shares: " + getSharesOwned());
-                        System.out.println("  Portfolio Value: $" + String.format("%.2f", getPortfolioValue()));
-                    }
-                }
-            } else if (response.startsWith("EXECUTED:SELL:")) {
-                String[] parts = response.split(":");
-                if (parts.length >= 5) {
-                    int quantity = Integer.parseInt(parts[2]);
-                    String priceStr = parts[4].replace(",", ".");
-                    double actualPrice = Double.parseDouble(priceStr);
-                    
-                    // ✅ CORRECTION: Utiliser Portfolio.sell()
-                    boolean success = portfolio.sell("AAPL", quantity, actualPrice);
-                    
-                    if (success) {
-                        totalTrades++;
-                        lastTradeTime = System.currentTimeMillis();
-                        
-                        double revenue = quantity * actualPrice;
-                        
-                        System.out.println(getLocalName() + " ✅ SELL EXECUTED:");
-                        System.out.println("  Quantity: " + quantity + " shares");
-                        System.out.println("  Price: $" + String.format("%.2f", actualPrice));
-                        System.out.println("  Revenue: $" + String.format("%.2f", revenue));
-                        System.out.println("  New Cash: $" + String.format("%.2f", getCurrentCash()));
-                        System.out.println("  Total Shares: " + getSharesOwned());
-                        System.out.println("  Portfolio Value: $" + String.format("%.2f", getPortfolioValue()));
-                    }
-                }
-            } else if (response.startsWith("REJECTED:")) {
-                System.out.println(getLocalName() + " ❌ TRADE REJECTED: " + response);
-            }
-            
-        } catch (Exception e) {
-            System.err.println(getLocalName() + " ❌ Error updating portfolio: " + e.getMessage());
-        }
-    }
-    
+    // Gestion des confirmations d'ordres
     private class OrderResponseHandler extends CyclicBehaviour {
         @Override
         public void action() {
-            // Écouter les CONFIRMATIONS du MarketMaker
-            MessageTemplate mt = MessageTemplate.and(
-                MessageTemplate.MatchProtocol("TRADING"),
-                MessageTemplate.MatchPerformative(ACLMessage.CONFIRM)
-            );
-            
+            MessageTemplate mt = MessageTemplate.MatchProtocol("TRADING");
             ACLMessage msg = receive(mt);
             if (msg != null) {
                 String response = msg.getContent();
-                System.out.println(getLocalName() + " Order response: " + response);
-                
                 try {
-                    // Parse: EXECUTED:BUY:29:AAPL:100.51652480224706
-                    if (response.startsWith("EXECUTED:")) {
+                    if (msg.getPerformative() == ACLMessage.CONFIRM && response.startsWith("EXECUTED:")) {
                         String[] parts = response.split(":");
-                        
                         if (parts.length >= 5) {
-                            String action = parts[1];        // BUY/SELL
-                            int quantity = Integer.parseInt(parts[2]);  // 29
-                            String symbol = parts[3];        // AAPL
-                            String priceStr = parts[4].replace(",", ".");
-                            double executionPrice = Double.parseDouble(priceStr);
+                            String action = parts[1];
+                            int quantity = Integer.parseInt(parts[2]);
+                            String symbol = parts[3];
+                            double executionPrice = Double.parseDouble(parts[4].replace(",", "."));
                             
-                            // 🔧 CORRECTION CRITIQUE: Mettre à jour le portfolio local
                             if ("BUY".equals(action)) {
                                 portfolio.buy(symbol, quantity, executionPrice);
-                                System.out.println(getLocalName() + " ✅ LOCAL Portfolio updated: " +
-                                                "Bought " + quantity + " @ $" + String.format("%.2f", executionPrice));
                             } else if ("SELL".equals(action)) {
                                 portfolio.sell(symbol, quantity, executionPrice);
-                                System.out.println(getLocalName() + " ✅ LOCAL Portfolio updated: " +
-                                                "Sold " + quantity + " @ $" + String.format("%.2f", executionPrice));
                             }
                             
-                            // Debug portfolio state
-                            double currentPrice = beliefs.getCurrentPrice();
-                            System.out.println(getLocalName() + " 📊 Portfolio after trade: " +
-                                            "Cash=$" + String.format("%.2f", portfolio.getCash()) +
-                                            ", Shares=" + portfolio.getShares(symbol) +
-                                            ", Value=$" + String.format("%.2f", portfolio.getTotalValue(symbol, currentPrice)));
+                            totalTrades++;
+                            tradesThisSession++;
+                            lastTradeRealMs = System.currentTimeMillis();
+                            System.out.println(getLocalName() + " EXECUTED " + action + " " + quantity +
+                                    " " + symbol + " @ $" + String.format("%.2f", executionPrice));
                         }
+                    } else if (msg.getPerformative() == ACLMessage.REFUSE ||
+                               msg.getPerformative() == ACLMessage.FAILURE) {
+                        System.out.println(getLocalName() + " Order rejected: " + response);
                     }
                 } catch (Exception e) {
-                    System.err.println(getLocalName() + " ❌ Error processing order response: " + e.getMessage());
-                    e.printStackTrace();
+                    System.err.println(getLocalName() + " Error processing order response: " + e.getMessage());
+                } finally {
+                    hasPendingOrder = false;
                 }
             } else {
                 block();
@@ -265,69 +279,27 @@ public class AggressiveTraderAgent extends Agent {
         }
     }
 
-    // 🔧 REFACTORED: MarketDataReceiver avec Portfolio
+    // Reception des donnees de marche
     private class MarketDataReceiver extends CyclicBehaviour {
         @Override
         public void action() {
-            // Market data
-            MessageTemplate mt = MessageTemplate.MatchProtocol("MARKET-DATA");
-            ACLMessage msg = receive(mt);
-            
+            ACLMessage msg = receive(MessageTemplate.MatchProtocol("MARKET-DATA"));
+            boolean handled = false;
             if (msg != null) {
                 beliefs.updateMarketData(msg.getContent());
                 currentPrice = beliefs.getCurrentPrice();
+                handled = true;
             }
-            
-            // Trading responses
-            MessageTemplate tradingTemplate = MessageTemplate.MatchProtocol("TRADING");
-            ACLMessage tradingResponse = receive(tradingTemplate);
-            
-            if (tradingResponse != null) {
-                updatePortfolioAfterTrade(tradingResponse.getContent());
-            }
-            
-            // Trade execution updates
-            MessageTemplate tradeMt = MessageTemplate.MatchProtocol("TRADE-EXECUTED");
-            ACLMessage tradeMsg = receive(tradeMt);
+            ACLMessage tradeMsg = receive(MessageTemplate.MatchProtocol("TRADE-EXECUTED"));
             if (tradeMsg != null) {
                 beliefs.updateTradeInfo(tradeMsg.getContent());
+                handled = true;
             }
-            
-            // News updates
-            MessageTemplate newsMt = MessageTemplate.MatchProtocol("NEWS");
-            ACLMessage newsMsg = receive(newsMt);
-            if (newsMsg != null) {
-                beliefs.updateNewsData(newsMsg.getContent());
-                
-                // React aggressively to news
-                if (beliefs.hasPositiveNews() && getCurrentCash() > MIN_CASH_RESERVE) {
-                    executeNewsBasedBuy();
-                } else if (beliefs.hasNegativeNews() && getSharesOwned() > 0) {
-                    executeEmergencySell();
-                }
-            }
-            
-            if (msg == null && tradingResponse == null && tradeMsg == null && newsMsg == null) {
-                block();
-            }
-        }
-        
-        private void executeNewsBasedBuy() {
-            int quantity = calculateNewsBasedQuantity();
-            if (quantity > 0) {
-                executeBuyOrder(quantity, beliefs.getAskPrice());
-                System.out.println(getLocalName() + " 📰 NEWS-BASED BUY: " + quantity + " shares");
-            }
-        }
-        
-        private void executeEmergencySell() {
-            int quantity = Math.min(getSharesOwned(), 10); // Vendre par petits lots
-            executeSellOrder(quantity, beliefs.getBidPrice());
-            System.out.println(getLocalName() + " 🚨 EMERGENCY SELL: " + quantity + " shares");
+            if (!handled) block();
         }
     }
     
-    // 🔧 REFACTORED: MomentumTradingBehaviour avec Portfolio
+    // Trading base sur le momentum (strategie agressive)
     private class MomentumTradingBehaviour extends TickerBehaviour {
         public MomentumTradingBehaviour(Agent agent, long period) {
             super(agent, period);
@@ -336,122 +308,35 @@ public class AggressiveTraderAgent extends Agent {
         @Override
         protected void onTick() {
             if (marketMaker == null || !isTrading) return;
-            
+            if (!canTradeNow()) return;
+
             double momentum = beliefs.getMomentum();
             double rsi = beliefs.getRSI();
             currentPrice = beliefs.getCurrentPrice();
-            
-            // Conditions d'achat agressives
-            if (momentum > MOMENTUM_THRESHOLD && 
-                rsi < 70 && 
-                getCurrentCash() > MIN_CASH_RESERVE) {
-                
+
+            // Signal d'achat: momentum positif et RSI pas en surachat
+            if (momentum > MOMENTUM_THRESHOLD && rsi < 70 && getCurrentCash() > MIN_CASH_RESERVE) {
                 int quantity = calculateMomentumBuyQuantity();
                 if (quantity > 0) {
                     executeBuyOrder(quantity, beliefs.getAskPrice());
-                    System.out.println(getLocalName() + " 🚀 MOMENTUM BUY: " + quantity + 
-                                     " shares (Momentum: " + String.format("%.4f", momentum) + ")");
+                    System.out.println(getLocalName() + " MOMENTUM BUY: " + quantity +
+                            " (M: " + String.format("%.4f", momentum) + ")");
                 }
             }
-            
-            // Conditions de vente (stop-loss agressif)
-            if (getSharesOwned() > 0 && 
-                (momentum < -MOMENTUM_THRESHOLD || rsi > 80)) {
-                
+
+            // Signal de vente: momentum negatif ou RSI en surachat
+            if (getSharesOwned() > 0 && (momentum < -MOMENTUM_THRESHOLD || rsi > 80)) {
                 int quantity = Math.min(getSharesOwned(), calculateMomentumSellQuantity());
                 if (quantity > 0) {
                     executeSellOrder(quantity, beliefs.getBidPrice());
-                    System.out.println(getLocalName() + " 💰 MOMENTUM SELL: " + quantity + 
-                                     " shares (RSI: " + String.format("%.1f", rsi) + ")");
+                    System.out.println(getLocalName() + " MOMENTUM SELL: " + quantity +
+                            " (RSI: " + String.format("%.1f", rsi) + ")");
                 }
             }
         }
     }
     
-    // 🔧 REFACTORED: ScalpingBehaviour avec Portfolio
-    private class ScalpingBehaviour extends TickerBehaviour {
-        private double lastBuyPrice = 0.0;
-        private int scalpingPosition = 0;
-        
-        public ScalpingBehaviour(Agent agent, long period) {
-            super(agent, period);
-        }
-        
-        @Override
-        protected void onTick() {
-            if (marketMaker == null) return;
-            
-            double currentPrice = beliefs.getCurrentPrice();
-            double bid = beliefs.getBidPrice();
-            double ask = beliefs.getAskPrice();
-            double spread = ask - bid;
-            
-            // Scalping uniquement si spread favorable
-            if (spread < currentPrice * 0.01) { // Spread < 1%
-                
-                // Acheter pour scalping
-                if (scalpingPosition == 0 && getCurrentCash() > ask * 10) {
-                    int quantity = 5; // Petites positions pour scalping
-                    executeBuyOrder(quantity, ask);
-                    lastBuyPrice = ask;
-                    scalpingPosition = quantity;
-                    
-                    System.out.println(getLocalName() + " ⚡ SCALP BUY: " + quantity + 
-                                     " @ $" + String.format("%.2f", ask));
-                }
-                
-                // Vendre pour profit rapide
-                else if (scalpingPosition > 0 && 
-                         currentPrice > lastBuyPrice * 1.005) { // 0.5% profit
-                    
-                    executeSellOrder(scalpingPosition, bid);
-                    
-                    double profit = scalpingPosition * (bid - lastBuyPrice);
-                    System.out.println(getLocalName() + " ⚡ SCALP SELL: " + scalpingPosition + 
-                                     " @ $" + String.format("%.2f", bid) +
-                                     " (Profit: $" + String.format("%.2f", profit) + ")");
-                    
-                    scalpingPosition = 0;
-                    lastBuyPrice = 0.0;
-                }
-            }
-        }
-    }
-    
-    // 🔧 REFACTORED: LeverageManagementBehaviour avec Portfolio
-    private class LeverageManagementBehaviour extends TickerBehaviour {
-        public LeverageManagementBehaviour(Agent agent, long period) {
-            super(agent, period);
-        }
-        
-        @Override
-        protected void onTick() {
-            double portfolioValue = getPortfolioValue();
-            double leverageRatio = portfolioValue / getInitialCapital();
-            
-            // Gestion du leverage
-            if (leverageRatio > LEVERAGE_RATIO) {
-                // Réduire la position
-                int sharesToSell = Math.min(getSharesOwned(), 
-                                          (int)((leverageRatio - LEVERAGE_RATIO) * getSharesOwned()));
-                if (sharesToSell > 0) {
-                    executeSellOrder(sharesToSell, beliefs.getBidPrice());
-                    System.out.println(getLocalName() + " ⚠️ LEVERAGE REDUCTION: Sold " + 
-                                     sharesToSell + " shares");
-                }
-            }
-            
-            // Gestion du cash minimum
-            if (getCurrentCash() < MIN_CASH_RESERVE && getSharesOwned() > 0) {
-                int sharesToSell = Math.min(5, getSharesOwned());
-                executeSellOrder(sharesToSell, beliefs.getBidPrice());
-                System.out.println(getLocalName() + " 💰 CASH RESERVE: Sold " + 
-                                 sharesToSell + " shares for liquidity");
-            }
-        }
-    }
-    
-    // 🔧 NOUVEAU: PortfolioStatusBehaviour
+    // Affichage periodique du statut du portfolio
     private class PortfolioStatusBehaviour extends TickerBehaviour {
         public PortfolioStatusBehaviour(Agent agent, long period) {
             super(agent, period);
@@ -470,21 +355,21 @@ public class AggressiveTraderAgent extends Agent {
             System.out.println("Strategy: Aggressive Momentum & Leverage");
             
             if (consecutiveWins > 0) {
-                System.out.println("Streak: " + consecutiveWins + " wins 🔥");
+                System.out.println("Streak: " + consecutiveWins + " wins");
             } else if (consecutiveLosses > 0) {
-                System.out.println("Streak: " + consecutiveLosses + " losses ❄️");
+                System.out.println("Streak: " + consecutiveLosses + " losses");
             }
         }
     }
     
-    // 🔧 HELPER METHODS
+    // Calcul de la quantite a acheter selon le momentum
     private int calculateMomentumBuyQuantity() {
         double availableCash = getCurrentCash();
         double maxInvestment = availableCash * MAX_POSITION_SIZE;
         
-        // Boost pour winning streak
+        // Boost pour serie gagnante
         if (consecutiveWins > 2) {
-            maxInvestment *= 1.2; // 20% boost
+            maxInvestment *= 1.2;
         }
         
         int quantity = (int)(maxInvestment / currentPrice);
@@ -493,17 +378,18 @@ public class AggressiveTraderAgent extends Agent {
     
     private int calculateMomentumSellQuantity() {
         int shares = getSharesOwned();
-        return Math.min(shares, Math.max(1, shares / 3)); // Vendre par tiers
+        return Math.min(shares, Math.max(1, shares / 3));
     }
     
     private int calculateNewsBasedQuantity() {
         double availableCash = getCurrentCash();
-        double maxInvestment = availableCash * 0.15; // 15% pour news
+        double maxInvestment = availableCash * 0.15;
         
         int quantity = (int)(maxInvestment / beliefs.getAskPrice());
         return Math.max(1, Math.min(10, quantity));
     }
     
+    // Ajustement de l'intervalle selon le facteur d'acceleration
     private long adjustInterval(long originalInterval) {
         int acceleration = getAccelerationFactor();
         return Math.max(50, originalInterval / acceleration);
@@ -517,7 +403,6 @@ public class AggressiveTraderAgent extends Agent {
         }
     }
     
-        
     private void findMarketMaker() {
         try {
             DFAgentDescription template = new DFAgentDescription();
@@ -537,12 +422,12 @@ public class AggressiveTraderAgent extends Agent {
     
     private void registerWithMarket() {
         try {
-             ACLMessage register = new ACLMessage(ACLMessage.REQUEST);
+            ACLMessage register = new ACLMessage(ACLMessage.REQUEST);
             register.addReceiver(marketMaker);
             register.setProtocol("PORTFOLIO");
             register.setContent("REGISTER:" + initialCapital);
             send(register);
-            isTrading=true;
+            isTrading = true;
             System.out.println(getLocalName() + " registration request sent");
         } catch (Exception e) {
             System.err.println(getLocalName() + " error registering: " + e.getMessage());

@@ -3,14 +3,14 @@ package src.model;
 import java.util.*;
 
 /**
- * Portfolio management for traders
- * Tracks cash, shares, and performance metrics
+ * Gestion de portfolio pour les traders
+ * Suit le cash, les actions et les metriques de performance
  */
 public class Portfolio {
     
     private String ownerName;
     private double cash;
-    private Map<String, Integer> shares; // Symbol -> Quantity
+    private Map<String, Integer> shares; // Symbole -> Quantite
     private List<Transaction> transactionHistory;
     private double totalCommissions;
     private double realizedPnL;
@@ -27,14 +27,14 @@ public class Portfolio {
     }
     
     /**
-     * Add cash to portfolio
+     * Ajoute du cash au portfolio
      */
     public void addCash(double amount) {
         this.cash += amount;
     }
     
     /**
-     * Remove cash from portfolio
+     * Retire du cash du portfolio
      */
     public boolean removeCash(double amount) {
         if (cash >= amount) {
@@ -53,14 +53,14 @@ public class Portfolio {
     }
     
     /**
-     * Add shares to portfolio
+     * Ajoute des actions au portfolio
      */
     public void addShares(String symbol, int quantity) {
         shares.put(symbol, shares.getOrDefault(symbol, 0) + quantity);
     }
     
     /**
-     * Remove shares from portfolio
+     * Retire des actions du portfolio
      */
     public boolean removeShares(String symbol, int quantity) {
         int currentShares = shares.getOrDefault(symbol, 0);
@@ -75,30 +75,30 @@ public class Portfolio {
     }
     
     /**
-     * Get number of shares for a symbol
+     * Obtient le nombre d'actions pour un symbole
      */
     public int getShares(String symbol) {
         return shares.getOrDefault(symbol, 0);
     }
     
     /**
-     * Record a transaction
+     * Enregistre une transaction
      */
     public void recordTransaction(Transaction transaction) {
         transactionHistory.add(transaction);
         
-        // Update P&L
+        // Met a jour le P&L
         if (transaction.getType().equals("SELL")) {
-            // Calculate realized P&L (simplified - assumes FIFO)
+            // Calcule le P&L realise (simplifie - suppose FIFO)
             realizedPnL += transaction.getPnL();
         }
         
-        // Add commission
+        // Ajoute la commission
         totalCommissions += transaction.getCommission();
     }
     
     /**
-     * Calculate portfolio value
+     * Calcule la valeur du portfolio
      */
     public double calculateValue(double currentPrice) {
         double stockValue = 0;
@@ -109,7 +109,7 @@ public class Portfolio {
     }
     
     /**
-     * Calculate unrealized P&L
+     * Calcule le P&L non realise
      */
     public double calculateUnrealizedPnL(String symbol, double currentPrice, double avgCost) {
         int quantity = shares.getOrDefault(symbol, 0);
@@ -117,7 +117,7 @@ public class Portfolio {
     }
     
     /**
-     * Get portfolio summary
+     * Obtient un resume du portfolio
      */
     public String getSummary(double currentPrice) {
         StringBuilder summary = new StringBuilder();
@@ -126,34 +126,33 @@ public class Portfolio {
         
         for (Map.Entry<String, Integer> entry : shares.entrySet()) {
             summary.append(entry.getKey()).append(": ")
-                   .append(entry.getValue()).append(" shares @ $")
+                   .append(entry.getValue()).append(" actions @ $")
                    .append(String.format("%.2f", currentPrice)).append("\n");
         }
         
-        summary.append("Total Value: $")
+        summary.append("Valeur totale: $")
                .append(String.format("%.2f", calculateValue(currentPrice))).append("\n");
-        summary.append("Realized P&L: $")
+        summary.append("P&L realise: $")
                .append(String.format("%.2f", realizedPnL)).append("\n");
-        summary.append("Total Commissions: $")
+        summary.append("Commissions totales: $")
                .append(String.format("%.2f", totalCommissions)).append("\n");
         
         return summary.toString();
     }
-    // Ajoutez ces méthodes à la classe Portfolio :
 
     /**
-     * Buy shares - deduct cash and add shares
+     * Acheter des actions - deduit le cash et ajoute les actions
      */
     public boolean buy(String symbol, int quantity, double price) {
         double totalCost = quantity * price;
-        double commission = quantity * 0.01; // $0.01 per share
+        double commission = quantity * 0.01; // 0,01$ par action
         double totalWithCommission = totalCost + commission;
         
         if (cash >= totalWithCommission) {
             cash -= totalWithCommission;
             addShares(symbol, quantity);
             
-            // Record transaction
+            // Enregistre la transaction
             Transaction transaction = new Transaction("BUY", symbol, quantity, price);
             recordTransaction(transaction);
             
@@ -163,17 +162,17 @@ public class Portfolio {
     }
 
     /**
-     * Sell shares - add cash and remove shares
+     * Vendre des actions - ajoute le cash et retire les actions
      */
     public boolean sell(String symbol, int quantity, double price) {
         if (removeShares(symbol, quantity)) {
             double totalReceived = quantity * price;
-            double commission = quantity * 0.01; // $0.01 per share
+            double commission = quantity * 0.01; // 0,01$ par action
             double netReceived = totalReceived - commission;
             
             cash += netReceived;
             
-            // Record transaction
+            // Enregistre la transaction
             Transaction transaction = new Transaction("SELL", symbol, quantity, price);
             recordTransaction(transaction);
             
@@ -183,7 +182,7 @@ public class Portfolio {
     }
 
     /**
-     * Check if we can afford to buy
+     * Verifie si on peut se permettre d'acheter
      */
     public boolean canAfford(String symbol, int quantity, double price) {
         double totalCost = quantity * price;
@@ -192,13 +191,13 @@ public class Portfolio {
     }
 
     /**
-     * Get available cash for trading
+     * Obtient le cash disponible pour le trading
      */
     public double getAvailableCash() {
         return cash;
     }
     
-    // Getters
+    // Accesseurs (getters)
     public String getOwnerName() { return ownerName; }
     public double getCash() { return cash; }
     public Map<String, Integer> getAllShares() { return new HashMap<>(shares); }
@@ -208,10 +207,10 @@ public class Portfolio {
 }
 
 /**
- * Transaction record
+ * Enregistrement de transaction
  */
 class Transaction {
-    private String type; // BUY or SELL
+    private String type; // BUY ou SELL
     private String symbol;
     private int quantity;
     private double price;
@@ -224,12 +223,12 @@ class Transaction {
         this.symbol = symbol;
         this.quantity = quantity;
         this.price = price;
-        this.commission = quantity * 0.01; // $0.01 per share commission
+        this.commission = quantity * 0.01; // Commission de 0,01$ par action
         this.pnl = 0;
         this.timestamp = System.currentTimeMillis();
     }
     
-    // Getters
+    // Accesseurs (getters)
     public String getType() { return type; }
     public String getSymbol() { return symbol; }
     public int getQuantity() { return quantity; }
@@ -238,6 +237,6 @@ class Transaction {
     public double getPnL() { return pnl; }
     public long getTimestamp() { return timestamp; }
     
-    // Setters
+    // Mutateurs (setters)
     public void setPnL(double pnl) { this.pnl = pnl; }
 }

@@ -12,38 +12,63 @@ import src.model.*;
 import java.util.*;
 
 /**
- * Follower Trader Agent - BDI Architecture avec Portfolio
- * Copies successful traders and follows market trends
- * Exhibits herd behavior and social trading
+ * Agent trader suiveur utilisant l'architecture BDI.
+ * Strategie: copie les traders performants et suit les tendances du marche.
+ * Exhibe un comportement gregaire et de trading social.
  */
 public class FollowerTraderAgent extends Agent {
     
-    // BDI Components
+    // Composants BDI
     private TradingBeliefs beliefs;
     private FollowerDesires desires;
     private FollowerIntentions intentions;
     
-    // 🔧 REFACTORING: Portfolio Management comme ConservativeTrader
+    // Gestion du portfolio
     private double initialCapital;
     private Portfolio portfolio;
     private String stockSymbol = "AAPL";
     
-    // Social Trading
+    // Trading social
     private Map<String, TraderProfile> observedTraders;
     private String currentLeader = null;
-    private int followDelay = 0; // Pas de délai pour plus de trading
+    private int followDelay = 0;
     private Queue<String> recentTrades;
     
-    // Herd Behavior Parameters
-    private double herdConfidence = 0.5; // 0 = independent, 1 = pure follower
-    private int minTradersForHerd = 1; // Minimum traders doing same action
+    // Parametres de comportement gregaire
+    private double herdConfidence = 0.5; // 0 = independant, 1 = suiveur pur
+    private int minTradersForHerd = 1;
     private int totalFollows = 0;
     
     private AID marketMaker;
+
+    // Garde-fous contre le sur-trading
+    private long lastTradeRealMs = 0L;
+    private boolean hasPendingOrder = false;
+    private int tradesThisSession = 0;
+    private final int maxTradesPerSimHour = 80;
+    private long lastNewsHandled = 0L;
+    private final long newsDebounceMs = simSecondsToRealMs(30);
+
+    private static int accel() {
+        try { return Integer.parseInt(System.getProperty("trading.acceleration", "1")); }
+        catch (Exception e) { return 1; }
+    }
+    
+    private static long simSecondsToRealMs(int s){ 
+        return (s * 1000L) / Math.max(1, accel()); 
+    }
+    
+    private final long minCooldownRealMs = simSecondsToRealMs(90);
+
+    private boolean canTradeNow() {
+        long now = System.currentTimeMillis();
+        return !hasPendingOrder
+            && (now - lastTradeRealMs >= minCooldownRealMs)
+            && (tradesThisSession < maxTradesPerSimHour);
+    }
     
     @Override
     protected void setup() {
-        // Initialize capital
         Object[] args = getArguments();
         if (args != null && args.length > 0) {
             initialCapital = (Double) args[0];
@@ -51,36 +76,37 @@ public class FollowerTraderAgent extends Agent {
             initialCapital = 8000.0;
         }
         
-        // 🔧 REFACTORING: Utiliser Portfolio comme ConservativeTrader
+        // Initialisation du portfolio
         portfolio = new Portfolio(getLocalName());
         portfolio.addCash(initialCapital);
         
-        // Initialize components
+        // Initialisation des composants
         beliefs = new TradingBeliefs();
         desires = new FollowerDesires();
         intentions = new FollowerIntentions();
         observedTraders = new HashMap<>();
         recentTrades = new LinkedList<>();
         
-        // Randomize follower personality
-        herdConfidence = 0.2 + Math.random() * 0.6; // 30% to 90% follower
+        // Personnalite aleatoire du suiveur
+        herdConfidence = 0.2 + Math.random() * 0.6; // 20% a 80% suiveur
         
         System.out.println("Follower Trader " + getLocalName() + 
                          " started with capital: $" + initialCapital +
                          " (Herd confidence: " + String.format("%.0f%%", herdConfidence * 100) + ")");
         
-        // Find market maker
+        // Recherche du MarketMaker et initialisation des comportements
         addBehaviour(new WakerBehaviour(this, 3000) {
             @Override
             protected void onWake() {
                 findMarketMaker();
+                subscribeMarketData();
                 
                 if (marketMaker != null) {
                     registerWithMarket();
                     
-                    // Add follower behaviours
                     addBehaviour(new MarketDataReceiver());
-                    addBehaviour(new OrderResponseHandler()); // 🔧 NOUVEAU
+                    addBehaviour(new OrderResponseHandler());
+                    addBehaviour(new NewsListener());
                     addBehaviour(new TradeObservationBehaviour());
                     addBehaviour(new FollowTradingBehaviour(myAgent, adjustInterval(2000)));
                     addBehaviour(new HerdBehaviourAnalysis(myAgent, adjustInterval(5000)));
@@ -91,8 +117,70 @@ public class FollowerTraderAgent extends Agent {
             }
         });
     }
-    
-    // 🔧 NOUVEAU: Méthodes Portfolio
+
+    private void subscribeMarketData() {
+        try {
+            ACLMessage sub = new ACLMessage(ACLMessage.SUBSCRIBE);
+            sub.setProtocol("MARKET-DATA-SUB");
+            sub.addReceiver(marketMaker);
+            sub.setContent(stockSymbol);
+            send(sub);
+            System.out.println(getLocalName() + " -> SUBSCRIBE MARKET-DATA for " + stockSymbol);
+        } catch (Exception e) {
+            System.err.println(getLocalName() + " subscribe error: " + e.getMessage());
+        }
+    }
+
+    // Reaction aux actualites en tant que suiveur
+    private class NewsListener extends CyclicBehaviour {
+        @Override
+        public void action() {
+            MessageTemplate mt = MessageTemplate.MatchProtocol("NEWS");
+            ACLMessage msg = receive(mt);
+
+            if (msg != null) {
+                String newsContent = msg.getContent();
+                beliefs.updateNewsData(newsContent);
+                System.out.println(getLocalName() + " News received: " + newsContent);
+                reactAsFollowerToNews();
+            } else {
+                block();
+            }
+        }
+        
+        private void reactAsFollowerToNews() {
+            long now = System.currentTimeMillis();
+            if (now - lastNewsHandled < newsDebounceMs) return;
+            if (!canTradeNow()) return;
+
+            double newsImpact = beliefs.getNewsImpact();
+
+            if (beliefs.hasPositiveNews()) {
+                if (getCurrentCash() > 1000 && herdConfidence > 0.4) {
+                    int quantity = Math.max(1, (int)(getCurrentCash() * 0.2 / beliefs.getAskPrice()));
+                    executeBuyOrder(quantity, "Following positive news sentiment");
+                    lastNewsHandled = now;
+                    System.out.println(getLocalName() + " NEWS FOLLOW BUY: " + quantity +
+                                       " (Herd: " + String.format("%.0f%%", herdConfidence * 100) + ")");
+                }
+            } else if (beliefs.hasNegativeNews()) {
+                if (getSharesOwned() > 0 && herdConfidence > 0.5) {
+                    int quantity = Math.min(getSharesOwned(), Math.max(1, getSharesOwned() / 3));
+                    executeSellOrder(quantity, "Panic selling on negative news");
+                    lastNewsHandled = now;
+                    System.out.println(getLocalName() + " NEWS PANIC SELL: " + quantity);
+                }
+            }
+
+            // Augmentation du comportement gregaire en cas de forte actualite
+            if (Math.abs(newsImpact) > 0.5) {
+                herdConfidence = Math.min(0.9, herdConfidence + 0.1);
+                System.out.println(getLocalName() + " Increased herd behavior: " +
+                                   String.format("%.0f%%", herdConfidence * 100));
+            }
+        }
+    }
+
     private double getCurrentCash() {
         return portfolio.getCash();
     }
@@ -140,8 +228,8 @@ public class FollowerTraderAgent extends Agent {
         try {
             ACLMessage register = new ACLMessage(ACLMessage.REQUEST);
             register.addReceiver(marketMaker);
-            register.setProtocol("PORTFOLIO"); // 🔧 CORRECTION: Même protocole
-            register.setContent("REGISTER:" + initialCapital); // 🔧 CORRECTION: Même format
+            register.setProtocol("PORTFOLIO");
+            register.setContent("REGISTER:" + initialCapital);
             send(register);
             
             System.out.println(getLocalName() + " registration request sent");
@@ -150,54 +238,47 @@ public class FollowerTraderAgent extends Agent {
         }
     }
     
-    // 🔧 NOUVEAU: OrderResponseHandler comme ConservativeTrader
+    // Gestion des confirmations d'ordres
     private class OrderResponseHandler extends CyclicBehaviour {
         @Override
         public void action() {
-            MessageTemplate mt = MessageTemplate.and(
-                MessageTemplate.MatchProtocol("TRADING"),
-                MessageTemplate.MatchPerformative(ACLMessage.CONFIRM)
-            );
-            
+            MessageTemplate mt = MessageTemplate.MatchProtocol("TRADING");
             ACLMessage msg = receive(mt);
+
             if (msg != null) {
                 String response = msg.getContent();
-                System.out.println(getLocalName() + " Order response: " + response);
                 
                 try {
-                    if (response.startsWith("EXECUTED:")) {
+                    if (msg.getPerformative() == ACLMessage.CONFIRM && response.startsWith("EXECUTED:")) {
                         String[] parts = response.split(":");
-                        
                         if (parts.length >= 5) {
                             String action = parts[1];
                             int quantity = Integer.parseInt(parts[2]);
                             String symbol = parts[3];
-                            String priceStr = parts[4].replace(",", ".");
-                            double executionPrice = Double.parseDouble(priceStr);
-                            
-                            // 🔧 CORRECTION: Mettre à jour le portfolio local
+                            double executionPrice = Double.parseDouble(parts[4].replace(",", "."));
+
                             if ("BUY".equals(action)) {
                                 portfolio.buy(symbol, quantity, executionPrice);
-                                totalFollows++;
-                                System.out.println(getLocalName() + " ✅ LOCAL Portfolio updated: " +
-                                                "Bought " + quantity + " @ $" + String.format("%.2f", executionPrice));
                             } else if ("SELL".equals(action)) {
                                 portfolio.sell(symbol, quantity, executionPrice);
-                                totalFollows++;
-                                System.out.println(getLocalName() + " ✅ LOCAL Portfolio updated: " +
-                                                "Sold " + quantity + " @ $" + String.format("%.2f", executionPrice));
                             }
-                            
-                            // Debug portfolio state
-                            double currentPrice = beliefs.getCurrentPrice();
-                            System.out.println(getLocalName() + " 📊 Portfolio after trade: " +
-                                            "Cash=$" + String.format("%.2f", getCurrentCash()) +
-                                            ", Shares=" + getSharesOwned() +
-                                            ", Value=$" + String.format("%.2f", getPortfolioValue()));
+
+                            tradesThisSession++;
+                            lastTradeRealMs = System.currentTimeMillis();
+
+                            System.out.println(getLocalName() + " EXECUTED " + action + " " + quantity +
+                                               " " + symbol + " @ $" + String.format("%.2f", executionPrice) +
+                                               " | Cash=$" + String.format("%.2f", getCurrentCash()) +
+                                               " | Shares=" + getSharesOwned());
                         }
+                    } else if (msg.getPerformative() == ACLMessage.REFUSE ||
+                               msg.getPerformative() == ACLMessage.FAILURE) {
+                        System.out.println(getLocalName() + " Order rejected: " + response);
                     }
                 } catch (Exception e) {
-                    System.err.println(getLocalName() + " ❌ Error processing order response: " + e.getMessage());
+                    System.err.println(getLocalName() + " Error processing order response: " + e.getMessage());
+                } finally {
+                    hasPendingOrder = false;
                 }
             } else {
                 block();
@@ -205,36 +286,25 @@ public class FollowerTraderAgent extends Agent {
         }
     }
 
+    // Evaluation si un trade doit etre suivi
     private boolean shouldFollowTrade(String trader, String action, int quantity, double price) {
-        boolean hasEnoughCash = getCurrentCash() >= quantity * price * 0.5; // 50% du trade
+        boolean hasEnoughCash = getCurrentCash() >= quantity * price * 0.5;
         boolean hasShares = getSharesOwned() > 0;
-        boolean mediumConfidence = herdConfidence > 0.25; // 25% seuil
+        boolean mediumConfidence = herdConfidence > 0.25;
         boolean isLeader = trader.equals(currentLeader);
-        boolean isNotFollower = !trader.startsWith("Follower"); // Ne pas suivre d'autres followers
-        
-        System.out.println(getLocalName() + " 🤔 Should follow " + trader + " " + action + "?");
-        System.out.println("  Trade value: $" + String.format("%.2f", quantity * price));
-        System.out.println("  My cash: $" + String.format("%.2f", getCurrentCash()));
-        System.out.println("  Enough cash for 50%: " + hasEnoughCash);
-        System.out.println("  Herd confidence: " + String.format("%.0f%%", herdConfidence * 100) + " (need >40%)");
-        System.out.println("  Is leader: " + isLeader);
-        System.out.println("  Not follower: " + isNotFollower);
+        boolean isNotFollower = !trader.startsWith("Follower");
         
         if ("BUY".equals(action)) {
-            boolean decision = hasEnoughCash && (mediumConfidence || isLeader) && isNotFollower;
-            System.out.println("  👉 BUY Decision: " + decision);
-            return decision;
+            return hasEnoughCash && (mediumConfidence || isLeader) && isNotFollower;
         } else if ("SELL".equals(action)) {
-            boolean decision = hasShares && quantity <= getSharesOwned() && (mediumConfidence || isLeader) && isNotFollower;
-            System.out.println("  👉 SELL Decision: " + decision);
-            return decision;
+            return hasShares && quantity <= getSharesOwned() && (mediumConfidence || isLeader) && isNotFollower;
         }
         
         return false;
     }
     
     /**
-     * Trader profile for tracking other traders
+     * Profil d'un trader observe pour le suivi.
      */
     private class TraderProfile {
         String name;
@@ -255,7 +325,7 @@ public class FollowerTraderAgent extends Agent {
             lastPrice = price;
             lastTradeTime = System.currentTimeMillis();
             
-            // Estimate performance
+            // Estimation de la performance
             if ("SELL".equals(action) && price > beliefs.getMovingAverage20()) {
                 profitableTrades++;
             }
@@ -270,12 +340,12 @@ public class FollowerTraderAgent extends Agent {
         }
         
         public boolean isRecentlyActive() {
-            return (System.currentTimeMillis() - lastTradeTime) < 30000; // Active in last 30 seconds
+            return (System.currentTimeMillis() - lastTradeTime) < 30000;
         }
     }
     
     /**
-     * Follower Desires - What the follower wants
+     * Desirs du suiveur - Ce que le suiveur veut faire.
      */
     private class FollowerDesires {
         
@@ -285,7 +355,7 @@ public class FollowerTraderAgent extends Agent {
             TraderProfile leader = observedTraders.get(currentLeader);
             return leader != null && 
                    leader.isRecentlyActive() &&
-                   leader.getSuccessRate() > 0.3; // 30% seuil
+                   leader.getSuccessRate() > 0.3;
         }
         
         public boolean wantsToJoinHerd() {
@@ -301,7 +371,6 @@ public class FollowerTraderAgent extends Agent {
         }
         
         public boolean wantsToActIndependently() {
-            // Sometimes act on own analysis
             return Math.random() > herdConfidence &&
                    (beliefs.isOversold() || beliefs.isOverbought());
         }
@@ -321,7 +390,7 @@ public class FollowerTraderAgent extends Agent {
     }
     
     /**
-     * Follower Intentions - How to execute following strategy
+     * Intentions du suiveur - Comment executer la strategie de suivi.
      */
     private class FollowerIntentions {
         
@@ -333,7 +402,7 @@ public class FollowerTraderAgent extends Agent {
                 }
             }
             
-            // Follow the herd
+            // Suivre le groupe
             Map<String, Integer> actionCounts = desires.getRecentActionCounts();
             String mostPopularAction = null;
             int maxCount = 0;
@@ -349,14 +418,14 @@ public class FollowerTraderAgent extends Agent {
         }
         
         public int calculateFollowQuantity(String action) {
-            double riskFactor = herdConfidence; // More confident = larger positions
+            double riskFactor = herdConfidence;
             
             if ("BUY".equals(action)) {
-                double maxInvestment = getCurrentCash() * 0.3 * riskFactor; // 30% max
+                double maxInvestment = getCurrentCash() * 0.3 * riskFactor;
                 int quantity = (int)(maxInvestment / beliefs.getAskPrice());
-                return Math.max(5, Math.min(15, quantity)); // Entre 5 et 15 shares
+                return Math.max(5, Math.min(15, quantity));
             } else if ("SELL".equals(action)) {
-                int maxSell = (int)(getSharesOwned() * 0.5 * riskFactor); // 50% max
+                int maxSell = (int)(getSharesOwned() * 0.5 * riskFactor);
                 return Math.max(5, Math.min(maxSell, getSharesOwned()));
             }
             
@@ -364,9 +433,7 @@ public class FollowerTraderAgent extends Agent {
         }
     }
     
-    /**
-     * Market data receiver
-     */
+    // Reception des donnees de marche
     private class MarketDataReceiver extends CyclicBehaviour {
         @Override
         public void action() {
@@ -381,9 +448,7 @@ public class FollowerTraderAgent extends Agent {
         }
     }
     
-    /**
-     * Observe other traders' actions
-     */
+    // Observation des actions des autres traders
     private class TradeObservationBehaviour extends CyclicBehaviour {
         @Override
         public void action() {
@@ -395,65 +460,40 @@ public class FollowerTraderAgent extends Agent {
                 beliefs.updateTradeInfo(content);
                 
                 try {
-                    // Parse trade: TRADE:ConservativeTrader-1:AAPL:29:100,58:BUY
                     String[] parts = content.split(":");
-                    
                     if (parts.length >= 6 && "TRADE".equals(parts[0])) {
                         String traderName = parts[1];
                         String symbol = parts[2];
                         int quantity = Integer.parseInt(parts[3]);
-                        String priceStr = parts[4].replace(",", ".");
-                        double price = Double.parseDouble(priceStr);
+                        double price = Double.parseDouble(parts[4].replace(",", "."));
                         String action = parts[5];
-                        
-                        // Don't follow own trades
+
                         if (!traderName.equals(getLocalName())) {
-                            // Update trader profile
-                            TraderProfile profile = observedTraders.getOrDefault(
-                                traderName, new TraderProfile(traderName));
+                            TraderProfile profile = observedTraders.getOrDefault(traderName, new TraderProfile(traderName));
                             profile.recordTrade(action, price);
                             observedTraders.put(traderName, profile);
-                            
-                            // Add to recent trades queue
+
                             recentTrades.offer(action);
-                            if (recentTrades.size() > 20) {
-                                recentTrades.poll();
-                            }
-                            
-                            System.out.println(getLocalName() + " observed: TRADE " + 
-                                            traderName + " @ $" + String.format("%.2f", price));
+                            if (recentTrades.size() > 20) recentTrades.poll();
 
-                            System.out.println(getLocalName() + " 🚀 FORCED FOLLOW TEST:");
-                            System.out.println("  Trader: " + traderName + ", Action: " + action);
-                            System.out.println("  My cash: $" + String.format("%.2f", getCurrentCash()));
-                            System.out.println("  Trade cost: $" + String.format("%.2f", quantity * price * 0.5)); // 50% du trade
+                            if (!canTradeNow()) return;
 
-                            // 🔧 CORRECTION: Follow logic avec Portfolio
                             if ("BUY".equals(action) && shouldFollowTrade(traderName, action, quantity, price)) {
-                                int followQuantity = Math.max(1, quantity / 2); // 50% du trade
+                                int followQuantity = Math.max(1, quantity / 2);
                                 double followCost = followQuantity * beliefs.getAskPrice();
-                                
                                 if (getCurrentCash() >= followCost) {
-                                    System.out.println(getLocalName() + " 💸 EXECUTING FOLLOW BUY!");
                                     executeBuyOrder(followQuantity, "Following " + traderName);
-                                } else {
-                                    System.out.println(getLocalName() + " ❌ Not enough cash to follow");
                                 }
                             } else if ("SELL".equals(action) && shouldFollowTrade(traderName, action, quantity, price)) {
                                 int followQuantity = Math.min(getSharesOwned(), Math.max(1, quantity / 2));
-                                
                                 if (followQuantity > 0) {
-                                    System.out.println(getLocalName() + " 💰 EXECUTING FOLLOW SELL!");
                                     executeSellOrder(followQuantity, "Following " + traderName);
-                                } else {
-                                    System.out.println(getLocalName() + " ❌ No shares to follow sell");
                                 }
                             }
                         }
                     }
                 } catch (Exception e) {
-                    System.err.println(getLocalName() + " ❌ Error parsing trade: " + content);
-                    System.err.println("Error: " + e.getMessage());
+                    System.err.println(getLocalName() + " Error parsing trade: " + content);
                 }
             } else {
                 block();
@@ -461,38 +501,38 @@ public class FollowerTraderAgent extends Agent {
         }
     }
     
-    // 🔧 NOUVEAU: Méthodes d'exécution des ordres avec Portfolio
+    // Execution des ordres avec gestion du portfolio
     private void executeBuyOrder(int quantity, String reason) {
+        if (!canTradeNow()) return;
         if (quantity > 0 && getCurrentCash() >= quantity * beliefs.getAskPrice()) {
             ACLMessage order = new ACLMessage(ACLMessage.REQUEST);
             order.addReceiver(marketMaker);
             order.setProtocol("TRADING");
             order.setContent("BUY:" + stockSymbol + ":" + quantity + ":" + String.format("%.2f", beliefs.getAskPrice()));
             send(order);
-            
-            System.out.println(getLocalName() + " 🚀 BUY ORDER: " + quantity + 
-                             " shares @ $" + String.format("%.2f", beliefs.getAskPrice()) +
-                             " (" + reason + ")");
+            hasPendingOrder = true;
+            System.out.println(getLocalName() + " BUY ORDER: " + quantity +
+                               " @ $" + String.format("%.2f", beliefs.getAskPrice()) +
+                               " (" + reason + ")");
         }
     }
     
     private void executeSellOrder(int quantity, String reason) {
+        if (!canTradeNow()) return;
         if (quantity > 0 && getSharesOwned() >= quantity) {
             ACLMessage order = new ACLMessage(ACLMessage.REQUEST);
             order.addReceiver(marketMaker);
             order.setProtocol("TRADING");
             order.setContent("SELL:" + stockSymbol + ":" + quantity + ":" + String.format("%.2f", beliefs.getBidPrice()));
             send(order);
-            
-            System.out.println(getLocalName() + " 💰 SELL ORDER: " + quantity + 
-                             " shares @ $" + String.format("%.2f", beliefs.getBidPrice()) +
-                             " (" + reason + ")");
+            hasPendingOrder = true;
+            System.out.println(getLocalName() + " SELL ORDER: " + quantity +
+                               " @ $" + String.format("%.2f", beliefs.getBidPrice()) +
+                               " (" + reason + ")");
         }
     }
     
-    /**
-     * Main following behaviour
-     */
+    // Comportement principal de suivi
     private class FollowTradingBehaviour extends TickerBehaviour {
         public FollowTradingBehaviour(Agent a, long period) {
             super(a, period);
@@ -500,16 +540,17 @@ public class FollowerTraderAgent extends Agent {
         
         @Override
         protected void onTick() {
-            // Update follow delay
+            if (!canTradeNow()) return;
+
             if (followDelay > 0) {
                 followDelay--;
             }
-            
+
             if (followDelay == 0) {
                 if (desires.wantsToFollowLeader()) {
                     followLeaderAction();
                 } else if (desires.wantsToJoinHerd()) {
-                    followHerdAction();  
+                    followHerdAction();
                 } else if (desires.wantsToActIndependently()) {
                     actIndependently();
                 }
@@ -518,7 +559,8 @@ public class FollowerTraderAgent extends Agent {
         
         private void followLeaderAction() {
             String action = intentions.determineActionToFollow();
-            
+            if (!canTradeNow()) return;
+
             if ("BUY".equals(action)) {
                 int quantity = intentions.calculateFollowQuantity("BUY");
                 executeBuyOrder(quantity, "Following leader: " + currentLeader);
@@ -526,13 +568,13 @@ public class FollowerTraderAgent extends Agent {
                 int quantity = intentions.calculateFollowQuantity("SELL");
                 executeSellOrder(quantity, "Following leader: " + currentLeader);
             }
-            
-            followDelay = 1 + (int)(Math.random() * 2); // Reset delay
+            followDelay = 1 + (int)(Math.random() * 2);
         }
         
         private void followHerdAction() {
             String action = intentions.determineActionToFollow();
-            
+            if (!canTradeNow()) return;
+
             if ("BUY".equals(action)) {
                 int quantity = intentions.calculateFollowQuantity("BUY");
                 executeBuyOrder(quantity, "Following the herd");
@@ -540,24 +582,23 @@ public class FollowerTraderAgent extends Agent {
                 int quantity = intentions.calculateFollowQuantity("SELL");
                 executeSellOrder(quantity, "Following the herd");
             }
-            
             followDelay = 1 + (int)(Math.random() * 2);
         }
         
         private void actIndependently() {
+            if (!canTradeNow()) return;
+
             if (beliefs.isOversold() && getCurrentCash() > 1000) {
                 int quantity = (int)(getCurrentCash() * 0.2 / beliefs.getAskPrice());
                 executeBuyOrder(quantity, "Independent decision (oversold)");
             } else if (beliefs.isOverbought() && getSharesOwned() > 0) {
-                int quantity = getSharesOwned() / 3;
+                int quantity = Math.max(1, getSharesOwned() / 3);
                 executeSellOrder(quantity, "Independent decision (overbought)");
             }
         }
     }
     
-    /**
-     * Analyze herd behavior patterns
-     */
+    // Analyse des patterns de comportement gregaire
     private class HerdBehaviourAnalysis extends TickerBehaviour {
         public HerdBehaviourAnalysis(Agent a, long period) {
             super(a, period);
@@ -565,7 +606,6 @@ public class FollowerTraderAgent extends Agent {
         
         @Override
         protected void onTick() {
-            // Count recent actions
             int buyCount = 0;
             int sellCount = 0;
             
@@ -574,16 +614,13 @@ public class FollowerTraderAgent extends Agent {
                 else if ("SELL".equals(trade)) sellCount++;
             }
             
-            // Adjust herd confidence based on market volatility
+            // Ajustement de la confiance gregaire selon la volatilite
             if (beliefs.getVolatility() > 0.05) {
-                // High volatility - increase herd behavior
                 herdConfidence = Math.min(0.9, herdConfidence + 0.05);
             } else {
-                // Low volatility - decrease herd behavior
                 herdConfidence = Math.max(0.3, herdConfidence - 0.02);
             }
             
-            // Log herd analysis
             System.out.println(getLocalName() + " Herd Analysis: " +
                              "Buy signals: " + buyCount + 
                              ", Sell signals: " + sellCount +
@@ -591,9 +628,7 @@ public class FollowerTraderAgent extends Agent {
         }
     }
     
-    /**
-     * Select and update leader to follow
-     */
+    // Selection et mise a jour du leader a suivre
     private class LeaderSelectionBehaviour extends TickerBehaviour {
         public LeaderSelectionBehaviour(Agent a, long period) {
             super(a, period);
@@ -601,14 +636,13 @@ public class FollowerTraderAgent extends Agent {
         
         @Override
         protected void onTick() {
-            // Find best performing trader
             String bestTrader = null;
             double bestPerformance = 0;
             
             for (Map.Entry<String, TraderProfile> entry : observedTraders.entrySet()) {
                 TraderProfile profile = entry.getValue();
                 
-                if (profile.totalTrades > 3 && // Minimum trades
+                if (profile.totalTrades > 3 &&
                     profile.getSuccessRate() > bestPerformance &&
                     profile.isRecentlyActive()) {
                     
@@ -617,7 +651,7 @@ public class FollowerTraderAgent extends Agent {
                 }
             }
             
-            // Update leader if found better one
+            // Mise a jour du leader si un meilleur est trouve
             if (bestTrader != null && !bestTrader.equals(currentLeader)) {
                 String oldLeader = currentLeader;
                 currentLeader = bestTrader;
@@ -627,7 +661,6 @@ public class FollowerTraderAgent extends Agent {
                                  " (Success rate: " + String.format("%.0f%%", bestPerformance * 100) + ")");
             }
             
-            // Log portfolio status
             System.out.println(getLocalName() + " Portfolio: $" + 
                              String.format("%.2f", getPortfolioValue()) +
                              " (Return: " + String.format("%.2f%%", getPortfolioReturn()) +

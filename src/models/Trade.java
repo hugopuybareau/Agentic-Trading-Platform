@@ -3,7 +3,7 @@ package src.model;
 import java.util.*;
 
 /**
- * Trade execution record
+ * Enregistrement d'une execution de transaction
  */
 public class Trade {
     
@@ -29,7 +29,7 @@ public class Trade {
             traderName, action, symbol, quantity, price);
     }
     
-    // Getters
+    // Accesseurs (getters)
     public String getTraderName() { return traderName; }
     public String getAction() { return action; }
     public String getSymbol() { return symbol; }

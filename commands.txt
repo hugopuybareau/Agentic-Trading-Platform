@@ -1,0 +1,5 @@
+# Se placer dans le dossier du projet
+cd "C:\Users\Martin\Documents\05_Universite\01_Multi_Agent\JADE\Agentic-Trading-Platform"
+
+javac -cp "lib/jade.jar;." -d out src/TradingPlatform.java src/agents/*.java src/models/*.java
+java -cp "out;lib/jade.jar" src.TradingPlatform SCENARIO

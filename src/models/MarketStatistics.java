@@ -3,8 +3,8 @@ package src.model;
 import java.util.*;
 
 /**
- * Market Statistics calculator
- * Tracks market metrics and technical indicators
+ * Calculateur de statistiques de marche
+ * Suit les metriques de marche et les indicateurs techniques
  */
 public class MarketStatistics {
     
@@ -12,23 +12,23 @@ public class MarketStatistics {
     private List<Integer> volumeHistory;
     private int maxHistorySize = 100;
     
-    // Statistics
+    // Statistiques
     private double high;
     private double low;
     private double open;
     private double close;
-    private double vwap; // Volume Weighted Average Price
+    private double vwap; // Prix Moyen Pondere par le Volume
     private double volatility;
     private int totalVolume;
     private int numberOfTrades;
     
-    // Technical indicators
-    private double sma20; // 20-period Simple Moving Average
-    private double sma50; // 50-period Simple Moving Average
-    private double ema12; // 12-period Exponential Moving Average
-    private double ema26; // 26-period Exponential Moving Average
-    private double macd; // MACD indicator
-    private double rsi; // Relative Strength Index
+    // Indicateurs techniques
+    private double sma20; // Moyenne Mobile Simple 20 periodes
+    private double sma50; // Moyenne Mobile Simple 50 periodes
+    private double ema12; // Moyenne Mobile Exponentielle 12 periodes
+    private double ema26; // Moyenne Mobile Exponentielle 26 periodes
+    private double macd; // Indicateur MACD
+    private double rsi; // Indice de Force Relative
     
     public MarketStatistics() {
         this.priceHistory = new ArrayList<>();
@@ -42,7 +42,7 @@ public class MarketStatistics {
     }
     
     /**
-     * Update statistics with new price
+     * Met a jour les statistiques avec un nouveau prix
      */
     public void updatePrice(double price) {
         priceHistory.add(price);
@@ -50,7 +50,7 @@ public class MarketStatistics {
             priceHistory.remove(0);
         }
         
-        // Update OHLC
+        // Met a jour OHLC (Ouverture, Haut, Bas, Cloture)
         if (open == 0) {
             open = price;
         }
@@ -63,7 +63,7 @@ public class MarketStatistics {
             low = price;
         }
         
-        // Calculate indicators
+        // Calcule les indicateurs
         calculateMovingAverages();
         calculateVolatility();
         calculateRSI();
@@ -71,7 +71,7 @@ public class MarketStatistics {
     }
     
     /**
-     * Update volume statistics
+     * Met a jour les statistiques de volume
      */
     public void updateVolume(int volume) {
         volumeHistory.add(volume);
@@ -86,7 +86,7 @@ public class MarketStatistics {
     }
     
     /**
-     * Calculate Simple Moving Averages
+     * Calcule les Moyennes Mobiles Simples
      */
     private void calculateMovingAverages() {
         if (priceHistory.size() >= 20) {
@@ -107,22 +107,22 @@ public class MarketStatistics {
     }
     
     /**
-     * Calculate volatility (standard deviation)
+     * Calcule la volatilite (ecart-type)
      */
     private void calculateVolatility() {
         if (priceHistory.size() < 20) {
-            volatility = 0.02; // Default 2%
+            volatility = 0.02; // Valeur par defaut 2%
             return;
         }
         
-        // Calculate returns
+        // Calcule les rendements
         List<Double> returns = new ArrayList<>();
         for (int i = 1; i < priceHistory.size(); i++) {
             double returnVal = (priceHistory.get(i) - priceHistory.get(i-1)) / priceHistory.get(i-1);
             returns.add(returnVal);
         }
         
-        // Calculate standard deviation of returns
+        // Calcule l'ecart-type des rendements
         double mean = returns.stream().mapToDouble(r -> r).average().orElse(0);
         double variance = returns.stream()
             .mapToDouble(r -> Math.pow(r - mean, 2))
@@ -132,11 +132,11 @@ public class MarketStatistics {
     }
     
     /**
-     * Calculate Relative Strength Index
+     * Calcule l'Indice de Force Relative (RSI)
      */
     private void calculateRSI() {
         if (priceHistory.size() < 14) {
-            rsi = 50; // Neutral
+            rsi = 50; // Neutre
             return;
         }
         
@@ -166,7 +166,7 @@ public class MarketStatistics {
     }
     
     /**
-     * Calculate MACD
+     * Calcule le MACD (Moving Average Convergence Divergence)
      */
     private void calculateMACD() {
         if (priceHistory.size() < 26) {
@@ -174,14 +174,14 @@ public class MarketStatistics {
             return;
         }
         
-        // Simplified EMA calculation
+        // Calcul simplifie de l'EMA
         ema12 = calculateEMA(12);
         ema26 = calculateEMA(26);
         macd = ema12 - ema26;
     }
     
     /**
-     * Calculate Exponential Moving Average
+     * Calcule la Moyenne Mobile Exponentielle
      */
     private double calculateEMA(int period) {
         if (priceHistory.size() < period) {
@@ -199,7 +199,7 @@ public class MarketStatistics {
     }
     
     /**
-     * Calculate Volume Weighted Average Price
+     * Calcule le Prix Moyen Pondere par le Volume (VWAP)
      */
     private void calculateVWAP() {
         if (volumeHistory.isEmpty()) {
@@ -224,32 +224,32 @@ public class MarketStatistics {
     }
     
     /**
-     * Get market summary
+     * Obtient un resume du marche
      */
     public String getMarketSummary() {
         StringBuilder summary = new StringBuilder();
-        summary.append("=== Market Statistics ===\n");
+        summary.append("=== Statistiques du Marche ===\n");
         summary.append(String.format("OHLC: %.2f / %.2f / %.2f / %.2f\n", open, high, low, close));
-        summary.append(String.format("Volume: %d trades, %d shares\n", numberOfTrades, totalVolume));
+        summary.append(String.format("Volume: %d transactions, %d actions\n", numberOfTrades, totalVolume));
         summary.append(String.format("VWAP: $%.2f\n", vwap));
-        summary.append(String.format("Volatility: %.2f%%\n", volatility * 100));
+        summary.append(String.format("Volatilite: %.2f%%\n", volatility * 100));
         summary.append(String.format("SMA(20): $%.2f, SMA(50): $%.2f\n", sma20, sma50));
         summary.append(String.format("RSI: %.1f\n", rsi));
         summary.append(String.format("MACD: %.3f\n", macd));
         
-        // Market condition
-        String condition = "NEUTRAL";
-        if (rsi > 70) condition = "OVERBOUGHT";
-        else if (rsi < 30) condition = "OVERSOLD";
-        else if (close > sma20 && sma20 > sma50) condition = "BULLISH";
-        else if (close < sma20 && sma20 < sma50) condition = "BEARISH";
+        // Condition du marche
+        String condition = "NEUTRE";
+        if (rsi > 70) condition = "SURVENTE";
+        else if (rsi < 30) condition = "SURVENTE";
+        else if (close > sma20 && sma20 > sma50) condition = "HAUSSIER";
+        else if (close < sma20 && sma20 < sma50) condition = "BAISSIER";
         
-        summary.append("Market Condition: ").append(condition).append("\n");
+        summary.append("Condition du Marche: ").append(condition).append("\n");
         
         return summary.toString();
     }
     
-    // Getters
+    // Accesseurs (getters)
     public double getHigh() { return high; }
     public double getLow() { return low; }
     public double getOpen() { return open; }

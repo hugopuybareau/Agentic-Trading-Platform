@@ -4,8 +4,8 @@ import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- * Order Book for managing buy and sell orders
- * Implements price-time priority matching
+ * Carnet d'ordres pour la gestion des ordres d'achat et de vente
+ * Implemente l'appariement selon la priorite prix-temps
  */
 public class OrderBook {
     
@@ -20,22 +20,22 @@ public class OrderBook {
     }
     
     /**
-     * Add a buy order to the book
+     * Ajoute un ordre d'achat au carnet
      */
     public synchronized void addBuyOrder(Order order) {
         buyOrders.offer(order);
     }
     
     /**
-     * Add a sell order to the book
+     * Ajoute un ordre de vente au carnet
      */
     public synchronized void addSellOrder(Order order) {
         sellOrders.offer(order);
     }
     
     /**
-     * Match orders in the book
-     * @return List of executed trades
+     * Apparie les ordres dans le carnet
+     * @return Liste des transactions executees
      */
     public synchronized List<Trade> matchOrders() {
         List<Trade> trades = new ArrayList<>();
@@ -44,12 +44,12 @@ public class OrderBook {
             Order buyOrder = buyOrders.peek();
             Order sellOrder = sellOrders.peek();
             
-            // Check if orders can be matched
+            // Verifie si les ordres peuvent etre apparies
             if (buyOrder.getPrice() >= sellOrder.getPrice()) {
                 int tradeQuantity = Math.min(buyOrder.getQuantity(), sellOrder.getQuantity());
                 double tradePrice = (buyOrder.getPrice() + sellOrder.getPrice()) / 2;
                 
-                // Create trade
+                // Cree la transaction
                 Trade trade = new Trade(
                     buyOrder.getTrader().getLocalName(),
                     "EXECUTED",
@@ -59,11 +59,11 @@ public class OrderBook {
                 );
                 trades.add(trade);
                 
-                // Update order quantities
+                // Met a jour les quantites des ordres
                 buyOrder.setQuantity(buyOrder.getQuantity() - tradeQuantity);
                 sellOrder.setQuantity(sellOrder.getQuantity() - tradeQuantity);
                 
-                // Remove fully executed orders
+                // Retire les ordres completement executes
                 if (buyOrder.getQuantity() == 0) {
                     buyOrders.poll();
                     buyOrder.setStatus("EXECUTED");
@@ -76,7 +76,7 @@ public class OrderBook {
                     executedOrders.add(sellOrder);
                 }
             } else {
-                break; // No more matches possible
+                break; // Plus d'appariements possibles
             }
         }
         
@@ -84,7 +84,7 @@ public class OrderBook {
     }
     
     /**
-     * Get the best bid price
+     * Obtient le meilleur prix d'achat (bid)
      */
     public double getBestBid() {
         if (buyOrders.isEmpty()) return 0;
@@ -99,7 +99,7 @@ public class OrderBook {
     }
     
     /**
-     * Get the best ask price
+     * Obtient le meilleur prix de vente (ask)
      */
     public double getBestAsk() {
         if (sellOrders.isEmpty()) return Double.MAX_VALUE;
@@ -114,21 +114,21 @@ public class OrderBook {
     }
     
     /**
-     * Get depth of buy orders
+     * Obtient la profondeur des ordres d'achat
      */
     public int getBuyOrdersCount() {
         return buyOrders.size();
     }
     
     /**
-     * Get depth of sell orders
+     * Obtient la profondeur des ordres de vente
      */
     public int getSellOrdersCount() {
         return sellOrders.size();
     }
     
     /**
-     * Get total buy volume
+     * Obtient le volume total des ordres d'achat
      */
     public int getTotalBuyVolume() {
         int volume = 0;
@@ -139,7 +139,7 @@ public class OrderBook {
     }
     
     /**
-     * Get total sell volume
+     * Obtient le volume total des ordres de vente
      */
     public int getTotalSellVolume() {
         int volume = 0;
@@ -150,7 +150,7 @@ public class OrderBook {
     }
     
     /**
-     * Cancel an order
+     * Annule un ordre
      */
     public synchronized boolean cancelOrder(Order order) {
         boolean removed = buyOrders.remove(order) || sellOrders.remove(order);
@@ -161,17 +161,17 @@ public class OrderBook {
     }
     
     /**
-     * Get market depth information
+     * Obtient les informations de profondeur du marche
      */
     public String getMarketDepth() {
         StringBuilder depth = new StringBuilder();
-        depth.append("=== Market Depth ===\n");
-        depth.append("BUY Orders: ").append(buyOrders.size()).append("\n");
-        depth.append("SELL Orders: ").append(sellOrders.size()).append("\n");
-        depth.append("Buy Volume: ").append(getTotalBuyVolume()).append("\n");
-        depth.append("Sell Volume: ").append(getTotalSellVolume()).append("\n");
-        depth.append("Best Bid: $").append(String.format("%.2f", getBestBid())).append("\n");
-        depth.append("Best Ask: $").append(String.format("%.2f", getBestAsk())).append("\n");
+        depth.append("=== Profondeur du Marche ===\n");
+        depth.append("Ordres ACHAT: ").append(buyOrders.size()).append("\n");
+        depth.append("Ordres VENTE: ").append(sellOrders.size()).append("\n");
+        depth.append("Volume Achat: ").append(getTotalBuyVolume()).append("\n");
+        depth.append("Volume Vente: ").append(getTotalSellVolume()).append("\n");
+        depth.append("Meilleur Bid: $").append(String.format("%.2f", getBestBid())).append("\n");
+        depth.append("Meilleur Ask: $").append(String.format("%.2f", getBestAsk())).append("\n");
         return depth.toString();
     }
 }

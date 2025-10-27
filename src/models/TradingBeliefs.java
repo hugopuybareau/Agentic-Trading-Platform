@@ -5,12 +5,12 @@ import java.text.NumberFormat;
 import java.util.Locale;
 
 /**
- * BDI Beliefs component for trading agents
- * Maintains market beliefs and technical indicators
+ * Composant BDI Beliefs pour les agents de trading
+ * Maintient les croyances sur le marche et les indicateurs techniques
  */
 public class TradingBeliefs {
     
-    // Market Data
+    // Donnees de marche
     private String symbol = "AAPL";
     private double currentPrice = 0.0;
     private double previousPrice = 0.0;
@@ -20,28 +20,28 @@ public class TradingBeliefs {
     private int volume = 0;
     private double volatility = 0.02;
     
-    // Price History
+    // Historique des prix
     private LinkedList<Double> priceHistory;
     private LinkedList<Integer> volumeHistory;
     private long lastUpdateTime;
     
-    // Technical Indicators
+    // Indicateurs techniques
     private double movingAverage20 = 0.0;
     private double movingAverage50 = 0.0;
-    private double rsi = 50.0; // Relative Strength Index
+    private double rsi = 50.0; // Indice de Force Relative
     private double momentum = 0.0;
-    private double ema12 = 0.0; // Exponential Moving Average
-    private double ema26 = 0.0;
-    private double macd = 0.0; // MACD indicator
+    private double ema12 = 0.0; // Moyenne Mobile Exponentielle 12
+    private double ema26 = 0.0; // Moyenne Mobile Exponentielle 26
+    private double macd = 0.0; // Indicateur MACD
     
-    // Market Sentiment
+    // Sentiment du marche
     private String marketSentiment = "NEUTRAL";
     private double sentimentScore = 0.0;
     
-    // Other Traders Activity
+    // Activite des autres traders
     private Map<String, TradeInfo> otherTradersActivity;
     
-    // News Impact
+    // Impact des actualites
     private List<NewsEvent> recentNews;
     private double newsImpact = 0.0;
     
@@ -54,22 +54,22 @@ public class TradingBeliefs {
     }
     
     /**
-     * Update beliefs with market data
+     * Met a jour les croyances avec les donnees de marche
      */
     public void updateMarketData(String marketData) {
         try {
-            // Format reçu: PRICE:AAPL:100,02:BID:99,47:ASK:100,57:VOLUME:0:VOLATILITY:0,0200
+            // Format recu: PRICE:AAPL:100,02:BID:99,47:ASK:100,57:VOLUME:0:VOLATILITY:0,0200
             String[] parts = marketData.split(":");
             
             if (parts.length < 6 || !parts[0].equals("PRICE")) {
-                System.err.println("Invalid market data format: " + marketData);
+                System.err.println("Format de donnees de marche invalide: " + marketData);
                 return;
             }
             
-            // Parse les données dans l'ordre correct
-            this.symbol = parts[1];                              // AAPL
+            // Parse les donnees dans l'ordre correct
+            this.symbol = parts[1];
             
-            String priceStr = parts[2].replace(",", ".");        // 100,02 -> 100.02
+            String priceStr = parts[2].replace(",", ".");
             this.previousPrice = this.currentPrice;
             this.currentPrice = Double.parseDouble(priceStr);
             
@@ -101,41 +101,40 @@ public class TradingBeliefs {
                 this.volatility = Double.parseDouble(volatilityStr);
             }
             
-            // Add to price history
+            // Ajoute a l'historique des prix
             priceHistory.add(currentPrice);
             if (priceHistory.size() > 100) {
                 priceHistory.removeFirst();
             }
             
-            // Update indicators
+            // Met a jour les indicateurs
             calculateTechnicalIndicators();
             updateMarketSentiment();
             
-            // Update timestamp
+            // Met a jour l'horodatage
             lastUpdateTime = System.currentTimeMillis();
             
             // Debug occasionnel
-            if (Math.random() < 0.01) { // 1% chance
-                System.out.println("Market data parsed: Price=$" + String.format("%.2f", currentPrice) + 
+            if (Math.random() < 0.01) {
+                System.out.println("Donnees de marche analysees: Prix=$" + String.format("%.2f", currentPrice) + 
                                 ", Bid=$" + String.format("%.2f", bidPrice) + 
                                 ", Ask=$" + String.format("%.2f", askPrice) + 
                                 ", Volume=" + volume);
             }
             
         } catch (NumberFormatException e) {
-            System.err.println("Error parsing market data numbers: " + marketData);
+            System.err.println("Erreur de parsing des nombres: " + marketData);
             System.err.println("NumberFormatException: " + e.getMessage());
-            // Debug: print the problematic parts
             String[] parts = marketData.split(":");
             System.err.println("Parts: " + Arrays.toString(parts));
         } catch (Exception e) {
-            System.err.println("Unexpected error in updateMarketData: " + e.getMessage());
+            System.err.println("Erreur inattendue dans updateMarketData: " + e.getMessage());
             e.printStackTrace();
         }
     }
     
     /**
-     * Update beliefs with trade execution information
+     * Met a jour les croyances avec les informations d'execution de trades
      */
     public void updateTradeInfo(String tradeData) {
         try {
@@ -143,7 +142,7 @@ public class TradingBeliefs {
             String[] parts = tradeData.split(":");
             
             if (parts.length < 6) {
-                System.err.println("Invalid trade data format: " + tradeData);
+                System.err.println("Format de trade invalide: " + tradeData);
                 return;
             }
             
@@ -154,37 +153,35 @@ public class TradingBeliefs {
             double price = Double.parseDouble(priceStr);
             String action = parts[5];
             
-            // Update trader activity
+            // Met a jour l'activite des traders
             TradeInfo info = otherTradersActivity.getOrDefault(trader, new TradeInfo(trader));
             info.addTrade(action, quantity, price);
             otherTradersActivity.put(trader, info);
             
-            // Update sentiment based on trade activity
+            // Met a jour le sentiment base sur l'activite de trading
             updateTradingSentiment(action, quantity);
             
         } catch (NumberFormatException e) {
-            System.err.println("Error parsing trade data: " + tradeData);
+            System.err.println("Erreur de parsing des donnees de trade: " + tradeData);
         } catch (Exception e) {
-            System.err.println("Error in updateTradeInfo: " + e.getMessage());
+            System.err.println("Erreur dans updateTradeInfo: " + e.getMessage());
         }
     }
     
     /**
-     * Update beliefs with news events
+     * Met a jour les croyances avec les evenements d'actualites
      */
     public void updateNewsData(String newsData) {
         try {
-            // Le format reçu du NewsProvider est différent !
-            // Reçu: "NEUTRAL:Market analysts maintain hold ratings:IMPACT:LOW"
+            // Format recu du NewsProvider: "NEUTRAL:Market analysts maintain hold ratings:IMPACT:LOW"
             String[] parts = newsData.split(":");
             
             if (parts.length >= 4) {
-                String sentiment = parts[0];           // NEUTRAL/POSITIVE/NEGATIVE
-                String title = parts[1];               // Description
-                // parts[2] est "IMPACT" - on l'ignore
-                String impactLevel = parts[3];         // LOW/MEDIUM/HIGH
+                String sentiment = parts[0];
+                String title = parts[1];
+                String impactLevel = parts[3];
                 
-                // 🔧 CORRECTION: Convertir impact level en valeur numérique
+                // Conversion du niveau d'impact en valeur numerique
                 double impact = 0.0;
                 switch (impactLevel.toUpperCase()) {
                     case "LOW":
@@ -197,12 +194,12 @@ public class TradingBeliefs {
                         impact = 0.8;
                         break;
                     default:
-                        // Si c'est déjà un nombre, essayer de le parser
+                        // Si c'est deja un nombre, essayer de le parser
                         try {
                             String impactStr = impactLevel.replace(",", ".");
                             impact = Double.parseDouble(impactStr);
                         } catch (NumberFormatException e) {
-                            impact = 0.5; // Valeur par défaut
+                            impact = 0.5; // Valeur par defaut
                         }
                         break;
                 }
@@ -210,43 +207,38 @@ public class TradingBeliefs {
                 NewsEvent event = new NewsEvent(title, sentiment, impact);
                 recentNews.add(event);
                 
-                // Keep only last 10 news events
+                // Garde seulement les 10 dernieres actualites
                 if (recentNews.size() > 10) {
                     recentNews.remove(0);
                 }
                 
-                // Update news impact
+                // Met a jour l'impact des actualites
                 calculateNewsImpact();
                 
-                // Debug
-                System.out.println("News processed: " + sentiment + " impact=" + impactLevel + 
-                                " (value=" + impact + ") - " + title);
+                System.out.println("Actualite traitee: " + sentiment + " impact=" + impactLevel + 
+                                " (valeur=" + impact + ") - " + title);
             }
         } catch (Exception e) {
-            System.err.println("Error updating news data: " + e.getMessage());
-            System.err.println("News data received: " + newsData);
+            System.err.println("Erreur de mise a jour des actualites: " + e.getMessage());
+            System.err.println("Donnees recues: " + newsData);
         }
     }
     
     /**
-     * Calculate technical indicators
+     * Calcule les indicateurs techniques
      */
     private void calculateTechnicalIndicators() {
         if (priceHistory.size() < 2) return;
         
-        // Moving Averages
         calculateMovingAverages();
-        
-        // RSI
         calculateRSI();
-        
-        // Momentum
         calculateMomentum();
-        
-        // MACD
         calculateMACD();
     }
     
+    /**
+     * Calcule les moyennes mobiles
+     */
     private void calculateMovingAverages() {
         int size = priceHistory.size();
         
@@ -258,7 +250,6 @@ public class TradingBeliefs {
             }
             movingAverage20 = sum / 20.0;
         } else if (size > 0) {
-            // Use available data
             double sum = priceHistory.stream().mapToDouble(Double::doubleValue).sum();
             movingAverage20 = sum / size;
         }
@@ -271,16 +262,18 @@ public class TradingBeliefs {
             }
             movingAverage50 = sum / 50.0;
         } else if (size > 0) {
-            // Use available data
             double sum = priceHistory.stream().mapToDouble(Double::doubleValue).sum();
             movingAverage50 = sum / size;
         }
     }
     
+    /**
+     * Calcule l'Indice de Force Relative (RSI)
+     */
     private void calculateRSI() {
         int period = Math.min(14, priceHistory.size() - 1);
         if (period < 2) {
-            rsi = 50.0; // Neutral RSI
+            rsi = 50.0; // RSI neutre
             return;
         }
         
@@ -306,6 +299,9 @@ public class TradingBeliefs {
         }
     }
     
+    /**
+     * Calcule le momentum des prix
+     */
     private void calculateMomentum() {
         int period = Math.min(10, priceHistory.size());
         if (period < 2) {
@@ -317,17 +313,20 @@ public class TradingBeliefs {
         momentum = ((currentPrice - oldPrice) / oldPrice) * 100.0;
     }
     
+    /**
+     * Calcule l'indicateur MACD
+     */
     private void calculateMACD() {
         if (priceHistory.size() < 26) {
             macd = 0.0;
             return;
         }
         
-        // Simplified MACD calculation
+        // Calcul MACD simplifie
         if (ema12 == 0.0) ema12 = currentPrice;
         if (ema26 == 0.0) ema26 = currentPrice;
         
-        // EMA calculation
+        // Calcul EMA
         double alpha12 = 2.0 / (12.0 + 1.0);
         double alpha26 = 2.0 / (26.0 + 1.0);
         
@@ -338,36 +337,36 @@ public class TradingBeliefs {
     }
     
     /**
-     * Update market sentiment based on various factors
+     * Met a jour le sentiment du marche base sur divers facteurs
      */
     private void updateMarketSentiment() {
         double sentiment = 0.0;
         
-        // Price momentum influence
+        // Influence du momentum
         if (momentum > 2.0) sentiment += 0.3;
         else if (momentum < -2.0) sentiment -= 0.3;
         
-        // RSI influence
-        if (rsi > 70) sentiment += 0.2; // Overbought - might reverse
-        else if (rsi < 30) sentiment -= 0.2; // Oversold - might recover
+        // Influence du RSI
+        if (rsi > 70) sentiment += 0.2; // Surachat - possible retournement
+        else if (rsi < 30) sentiment -= 0.2; // Survente - possible reprise
         
-        // Moving average influence
+        // Influence des moyennes mobiles
         if (currentPrice > movingAverage20) sentiment += 0.2;
         else sentiment -= 0.2;
         
         if (movingAverage20 > movingAverage50) sentiment += 0.1;
         else sentiment -= 0.1;
         
-        // Volume influence
+        // Influence du volume
         if (volume > getAverageVolume() * 1.5) sentiment += 0.1;
         
-        // News influence
+        // Influence des actualites
         sentiment += newsImpact * 0.3;
         
-        // Trading activity influence
+        // Influence de l'activite de trading
         sentiment += getTradingActivitySentiment() * 0.2;
         
-        // Update sentiment score and classification
+        // Met a jour le score et la classification du sentiment
         sentimentScore = Math.max(-1.0, Math.min(1.0, sentiment));
         
         if (sentimentScore > 0.3) {
@@ -379,8 +378,10 @@ public class TradingBeliefs {
         }
     }
     
+    /**
+     * Met a jour le sentiment base sur les actions des autres traders
+     */
     private void updateTradingSentiment(String action, int quantity) {
-        // Update sentiment based on other traders' actions
         double weight = Math.log(quantity + 1) * 0.1;
         
         if ("BUY".equals(action)) {
@@ -392,6 +393,9 @@ public class TradingBeliefs {
         sentimentScore = Math.max(-1.0, Math.min(1.0, sentimentScore));
     }
     
+    /**
+     * Calcule l'impact des actualites avec decroissance temporelle
+     */
     private void calculateNewsImpact() {
         if (recentNews.isEmpty()) {
             newsImpact = 0.0;
@@ -402,9 +406,9 @@ public class TradingBeliefs {
         long currentTime = System.currentTimeMillis();
         
         for (NewsEvent event : recentNews) {
-            // Decay impact over time
+            // Decroissance de l'impact dans le temps
             long age = currentTime - event.getTimestamp();
-            double decayFactor = Math.exp(-age / (1000.0 * 60.0 * 30.0)); // 30-minute half-life
+            double decayFactor = Math.exp(-age / (1000.0 * 60.0 * 30.0)); // Demi-vie de 30 minutes
             
             double impact = event.getImpact() * decayFactor;
             if ("POSITIVE".equals(event.getSentiment())) {
@@ -417,11 +421,17 @@ public class TradingBeliefs {
         newsImpact = Math.max(-1.0, Math.min(1.0, totalImpact));
     }
     
+    /**
+     * Calcule le volume moyen
+     */
     private double getAverageVolume() {
         if (volumeHistory.isEmpty()) return 1000.0;
         return volumeHistory.stream().mapToInt(Integer::intValue).average().orElse(1000.0);
     }
     
+    /**
+     * Obtient le sentiment base sur l'activite de trading
+     */
     private double getTradingActivitySentiment() {
         if (otherTradersActivity.isEmpty()) return 0.0;
         
@@ -439,7 +449,7 @@ public class TradingBeliefs {
         return (buyActivity - sellActivity) / totalActivity;
     }
     
-    // Market Analysis Methods
+    // Methodes d'analyse du marche
     public boolean isOversold() {
         return rsi < 30;
     }
@@ -465,7 +475,7 @@ public class TradingBeliefs {
     }
     
     public boolean isVolatile() {
-        return volatility > 0.05; // 5% volatility threshold
+        return volatility > 0.05; // Seuil de volatilite a 5%
     }
     
     public double getPriceChangePercent() {
@@ -474,7 +484,7 @@ public class TradingBeliefs {
     }
     
     /**
-     * Additional market analysis methods for AggressiveTrader
+     * Methodes d'analyse supplementaires pour AggressiveTrader
      */
     public boolean isBullishTrend() {
         return momentum > 2.0 && currentPrice > movingAverage20 && 
@@ -513,7 +523,7 @@ public class TradingBeliefs {
     }
 
     public boolean isPriceNearSupport() {
-        // Simplified support detection
+        // Detection de support simplifiee
         if (priceHistory.size() < 20) return false;
         
         double minPrice = priceHistory.stream()
@@ -522,11 +532,11 @@ public class TradingBeliefs {
             .min()
             .orElse(currentPrice);
         
-        return currentPrice <= minPrice * 1.02; // Within 2% of recent low
+        return currentPrice <= minPrice * 1.02; // Dans les 2% du plus bas recent
     }
 
     public boolean isPriceNearResistance() {
-        // Simplified resistance detection
+        // Detection de resistance simplifiee
         if (priceHistory.size() < 20) return false;
         
         double maxPrice = priceHistory.stream()
@@ -535,11 +545,11 @@ public class TradingBeliefs {
             .max()
             .orElse(currentPrice);
         
-        return currentPrice >= maxPrice * 0.98; // Within 2% of recent high
+        return currentPrice >= maxPrice * 0.98; // Dans les 2% du plus haut recent
     }
 
     public double getTrendStrength() {
-        // Combination of momentum and moving average alignment
+        // Combinaison du momentum et de l'alignement des moyennes mobiles
         double maAlignment = 0.0;
         if (movingAverage20 > movingAverage50) maAlignment = 0.5;
         else if (movingAverage20 < movingAverage50) maAlignment = -0.5;
@@ -557,11 +567,13 @@ public class TradingBeliefs {
         return isVolatile() || Math.abs(sentimentScore) > 0.8 || hasNegativeNews();
     }
 
-    // Méthodes pour l'analyse de convergence/divergence
+    /**
+     * Methodes pour l'analyse de convergence/divergence
+     */
     public boolean hasBullishDivergence() {
         if (priceHistory.size() < 10) return false;
         
-        // Price making lower lows but RSI making higher lows
+        // Prix fait des plus bas descendants mais RSI fait des plus bas ascendants
         double recentLow = priceHistory.stream()
             .skip(Math.max(0, priceHistory.size() - 5))
             .mapToDouble(Double::doubleValue)
@@ -575,13 +587,13 @@ public class TradingBeliefs {
             .min()
             .orElse(currentPrice);
         
-        return recentLow < olderLow && rsi > 35; // Simplified divergence
+        return recentLow < olderLow && rsi > 35; // Divergence simplifiee
     }
 
     public boolean hasBearishDivergence() {
         if (priceHistory.size() < 10) return false;
         
-        // Price making higher highs but RSI making lower highs
+        // Prix fait des plus hauts ascendants mais RSI fait des plus hauts descendants
         double recentHigh = priceHistory.stream()
             .skip(Math.max(0, priceHistory.size() - 5))
             .mapToDouble(Double::doubleValue)
@@ -595,10 +607,10 @@ public class TradingBeliefs {
             .max()
             .orElse(currentPrice);
         
-        return recentHigh > olderHigh && rsi < 65; // Simplified divergence
+        return recentHigh > olderHigh && rsi < 65; // Divergence simplifiee
     }
     
-    // Getters
+    // Accesseurs (getters)
     public String getSymbol() { return symbol; }
     public double getCurrentPrice() { return currentPrice; }
     public double getPreviousPrice() { return previousPrice; }
@@ -619,29 +631,31 @@ public class TradingBeliefs {
     public Map<String, TradeInfo> getOtherTradersActivity() { return new HashMap<>(otherTradersActivity); }
     public long getLastUpdateTime() { return lastUpdateTime; }
     
-    // Debug method
+    /**
+     * Methode de debogage
+     */
     public void printDebugInfo() {
         System.out.println("=== TradingBeliefs Debug ===");
-        System.out.println("Symbol: " + symbol);
-        System.out.println("Current Price: $" + String.format("%.2f", currentPrice));
-        System.out.println("Previous Price: $" + String.format("%.2f", previousPrice));
+        System.out.println("Symbole: " + symbol);
+        System.out.println("Prix actuel: $" + String.format("%.2f", currentPrice));
+        System.out.println("Prix precedent: $" + String.format("%.2f", previousPrice));
         System.out.println("Bid/Ask: $" + String.format("%.2f", bidPrice) + "/$" + String.format("%.2f", askPrice));
         System.out.println("Volume: " + volume);
-        System.out.println("Volatility: " + String.format("%.4f", volatility));
+        System.out.println("Volatilite: " + String.format("%.4f", volatility));
         System.out.println("MA20/MA50: " + String.format("%.2f", movingAverage20) + "/" + String.format("%.2f", movingAverage50));
         System.out.println("RSI: " + String.format("%.1f", rsi));
         System.out.println("Momentum: " + String.format("%.2f%%", momentum));
         System.out.println("MACD: " + String.format("%.4f", macd));
-        System.out.println("Market Sentiment: " + marketSentiment + " (" + String.format("%.2f", sentimentScore) + ")");
-        System.out.println("News Impact: " + String.format("%.2f", newsImpact));
-        System.out.println("Price History Size: " + priceHistory.size());
-        System.out.println("Active Traders: " + otherTradersActivity.size());
+        System.out.println("Sentiment du marche: " + marketSentiment + " (" + String.format("%.2f", sentimentScore) + ")");
+        System.out.println("Impact actualites: " + String.format("%.2f", newsImpact));
+        System.out.println("Taille historique prix: " + priceHistory.size());
+        System.out.println("Traders actifs: " + otherTradersActivity.size());
         System.out.println("============================");
     }
 }
 
 /**
- * Helper class for tracking other traders' activity
+ * Classe auxiliaire pour suivre l'activite des autres traders
  */
 class TradeInfo {
     private String traderName;
@@ -674,7 +688,7 @@ class TradeInfo {
             averageSellPrice = (oldTotal + quantity * price) / totalSellVolume;
         }
         
-        // Keep only last 10 trades
+        // Garde seulement les 10 derniers trades
         if (recentTrades.size() > 10) {
             recentTrades.remove(0);
         }
@@ -682,7 +696,7 @@ class TradeInfo {
         lastTradeTime = System.currentTimeMillis();
     }
     
-    // Getters
+    // Accesseurs (getters)
     public String getTraderName() { return traderName; }
     public double getBuyVolume() { return totalBuyVolume; }
     public double getSellVolume() { return totalSellVolume; }
@@ -693,12 +707,12 @@ class TradeInfo {
 }
 
 /**
- * Helper class for news events
+ * Classe auxiliaire pour les evenements d'actualites
  */
 class NewsEvent {
     private String title;
     private String sentiment; // POSITIVE, NEGATIVE, NEUTRAL
-    private double impact; // -1.0 to 1.0
+    private double impact; // -1.0 a 1.0
     private long timestamp;
     
     public NewsEvent(String title, String sentiment, double impact) {
@@ -708,7 +722,7 @@ class NewsEvent {
         this.timestamp = System.currentTimeMillis();
     }
     
-    // Getters
+    // Accesseurs (getters)
     public String getTitle() { return title; }
     public String getSentiment() { return sentiment; }
     public double getImpact() { return impact; }

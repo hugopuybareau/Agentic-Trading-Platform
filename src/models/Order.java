@@ -3,12 +3,12 @@ package src.model;
 import jade.core.AID;
 
 /**
- * Order representation for the trading system
+ * Representation d'un ordre pour le systeme de trading
  */
 public class Order {
     
     private AID trader;
-    private String type; // BUY or SELL
+    private String type; // BUY ou SELL
     private String symbol;
     private int quantity;
     private double price;
@@ -25,7 +25,7 @@ public class Order {
         this.status = "PENDING";
     }
     
-    // Getters
+    // Accesseurs (getters)
     public AID getTrader() { return trader; }
     public String getType() { return type; }
     public String getSymbol() { return symbol; }
@@ -34,7 +34,7 @@ public class Order {
     public long getTimestamp() { return timestamp; }
     public String getStatus() { return status; }
     
-    // Setters
+    // Mutateurs (setters)
     public void setStatus(String status) { this.status = status; }
     public void setQuantity(int quantity) { this.quantity = quantity; }
     
