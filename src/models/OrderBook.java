@@ -1,4 +1,4 @@
-package src.model;
+package src.models;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;

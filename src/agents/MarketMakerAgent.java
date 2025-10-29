@@ -8,7 +8,7 @@ import jade.lang.acl.MessageTemplate;
 import jade.domain.DFService;
 import jade.domain.FIPAAgentManagement.*;
 import jade.domain.FIPAException;
-import src.model.*;
+import src.models.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 

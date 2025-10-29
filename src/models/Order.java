@@ -1,4 +1,4 @@
-package src.model;
+package src.models;
 
 import jade.core.AID;
 

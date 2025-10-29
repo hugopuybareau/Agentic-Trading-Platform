@@ -105,11 +105,12 @@ public class TradingPlatform {
             Thread.sleep(1000);
             
             // NewsProvider génère les actualités selon le scénario choisi
-            System.out.println("Creation du NewsProvider avec scenario: " + args[0]);
+            String scenario = (args != null && args.length > 0) ? args[0] : "default";
+            System.out.println("Creation du NewsProvider avec scenario: " + scenario);
             AgentController newsProvider = mainContainer.createNewAgent(
                 "NewsProvider",
                 "src.agents.NewsProviderAgent",
-                new Object[]{args[0], TIME_ACCELERATION_FACTOR}
+                new Object[]{scenario, TIME_ACCELERATION_FACTOR}
             );
             newsProvider.start();
             Thread.sleep(1000);
