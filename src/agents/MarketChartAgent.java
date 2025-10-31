@@ -24,7 +24,6 @@ import java.util.List;
 public class MarketChartAgent extends Agent {
     private MarketChartFrame frame;
     private String symbol = "AAPL";
-    private int maxPoints = 600;
     private String outputDir = "charts";
 
     @Override
@@ -33,24 +32,19 @@ public class MarketChartAgent extends Agent {
         if (args != null && args.length > 0 && args[0] != null) {
             symbol = args[0].toString();
         }
-        if (args != null && args.length > 1 && args[1] != null) {
-            try { 
-                maxPoints = Integer.parseInt(args[1].toString()); 
-            } catch (Exception ignored) {}
-        }
 
         // Creation du repertoire de sortie pour les graphiques
         new File(outputDir).mkdirs();
 
         final String title = "Trading Platform - " + symbol;
         SwingUtilities.invokeLater(() -> {
-            frame = new MarketChartFrame(title, maxPoints);
+            frame = new MarketChartFrame(title);
             frame.setVisible(true);
         });
 
         addBehaviour(new MarketDataListener());
         addBehaviour(new TradeExecutedListener());
-        addBehaviour(new NewsListener()); // ✅ Nouveau behaviour pour les actualites
+        addBehaviour(new NewsListener()); 
         sendMarketDataSubscribe();
 
         addBehaviour(new CyclicBehaviour() {
@@ -184,7 +178,7 @@ public class MarketChartAgent extends Agent {
         }
     }
 
-    // ✅ NOUVEAU: Ecoute et affichage des actualites
+    // Ecoute et affichage des actualites
     private class NewsListener extends CyclicBehaviour {
         @Override
         public void action() {
@@ -224,7 +218,7 @@ public class MarketChartAgent extends Agent {
     static class MarketChartFrame extends JFrame {
         final MarketChartPanel panel;
 
-        MarketChartFrame(String title, int maxPoints) {
+        MarketChartFrame(String title) {
             super(title);
             setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
             setSize(1200, 700);
@@ -244,7 +238,7 @@ public class MarketChartAgent extends Agent {
                 } catch (Exception ignored) {}
             }
             
-            panel = new MarketChartPanel(maxPoints);
+            panel = new MarketChartPanel();
             setContentPane(panel);
         }
     }
@@ -270,13 +264,12 @@ public class MarketChartAgent extends Agent {
      * Panel de dessin du graphique financier.
      */
     static class MarketChartPanel extends JPanel {
-        private final int maxPoints;
         private final List<Long> times = new ArrayList<>();
         private final List<Double> prices = new ArrayList<>();
         private final List<Long> tradeTimes = new ArrayList<>();
         private final List<Double> tradePrices = new ArrayList<>();
         private final List<Boolean> tradeIsBuy = new ArrayList<>();
-        private final List<NewsMarker> newsMarkers = new ArrayList<>(); // ✅ Nouveau
+        private final List<NewsMarker> newsMarkers = new ArrayList<>();
 
         // Palette de couleurs financieres
         private static final Color BACKGROUND = new Color(18, 18, 24);
@@ -286,23 +279,21 @@ public class MarketChartAgent extends Agent {
         private static final Color BUY_COLOR = new Color(76, 175, 80);
         private static final Color SELL_COLOR = new Color(244, 67, 54);
         private static final Color BORDER_COLOR = new Color(60, 63, 65);
-        private static final Color NEWS_POSITIVE = new Color(139, 195, 74); // ✅ Vert clair
-        private static final Color NEWS_NEGATIVE = new Color(255, 87, 34); // ✅ Orange/Rouge
-        private static final Color NEWS_NEUTRAL = new Color(158, 158, 158); // ✅ Gris
+        private static final Color NEWS_POSITIVE = new Color(139, 195, 74);
+        private static final Color NEWS_NEGATIVE = new Color(255, 87, 34); 
+        private static final Color NEWS_NEUTRAL = new Color(158, 158, 158);
 
-        MarketChartPanel(int maxPoints) {
-            this.maxPoints = maxPoints;
+        MarketChartPanel() {
             setBackground(BACKGROUND);
             setDoubleBuffered(true);
             
-            // ✅ Tooltip pour afficher les details des actualites
+            // Tooltip pour afficher les details des actualites
             setToolTipText("");
         }
 
         synchronized void addPoint(long t, double p) {
             times.add(t);
             prices.add(p);
-            trim();
             repaint();
         }
 
@@ -310,40 +301,16 @@ public class MarketChartAgent extends Agent {
             tradeTimes.add(t);
             tradePrices.add(p);
             tradeIsBuy.add(isBuy);
-            trimTrades();
             repaint();
         }
 
-        // ✅ NOUVEAU: Ajouter un marqueur d'actualite
+        // Ajouter un marqueur d'actualite
         synchronized void addNewsMarker(long t, String sentiment, String description, String impactLevel) {
             newsMarkers.add(new NewsMarker(t, sentiment, description, impactLevel));
-            trimNews();
             repaint();
         }
 
-        private void trim() {
-            while (times.size() > maxPoints) {
-                times.remove(0);
-                prices.remove(0);
-            }
-        }
-
-        private void trimTrades() {
-            while (tradeTimes.size() > 200) {
-                tradeTimes.remove(0);
-                tradePrices.remove(0);
-                tradeIsBuy.remove(0);
-            }
-        }
-
-        // ✅ NOUVEAU: Limiter le nombre d'actualites affichees
-        private void trimNews() {
-            while (newsMarkers.size() > 100) {
-                newsMarkers.remove(0);
-            }
-        }
-
-        // ✅ NOUVEAU: Tooltip dynamique pour les actualites
+        // Tooltip dynamique pour les actualites
         @Override
         public String getToolTipText(java.awt.event.MouseEvent e) {
             synchronized (this) {
@@ -399,7 +366,7 @@ public class MarketChartAgent extends Agent {
             List<Long> tt;
             List<Double> tp;
             List<Boolean> tb;
-            List<NewsMarker> newsCopy; // ✅ Nouveau
+            List<NewsMarker> newsCopy;
             
             synchronized (this) {
                 tCopy = new ArrayList<>(times);
@@ -407,7 +374,7 @@ public class MarketChartAgent extends Agent {
                 tt = new ArrayList<>(tradeTimes);
                 tp = new ArrayList<>(tradePrices);
                 tb = new ArrayList<>(tradeIsBuy);
-                newsCopy = new ArrayList<>(newsMarkers); // ✅ Nouveau
+                newsCopy = new ArrayList<>(newsMarkers);
             }
             
             if (pCopy.isEmpty()) {
@@ -451,7 +418,7 @@ public class MarketChartAgent extends Agent {
             drawPriceLabels(g, left, top, plotH, min, max);
             drawTimeLabels(g, left, top, plotW, plotH, tMin, tMax);
             
-            // ✅ Dessiner les actualites AVANT la ligne de prix (en arriere-plan)
+            // Dessiner les actualites AVANT la ligne de prix (en arriere-plan)
             drawNewsMarkers(g, newsCopy, left, top, plotW, plotH, tMin, tMax);
             
             drawPriceLine(g, tCopy, pCopy, left, top, plotW, plotH, tMin, tMax, min, max);
@@ -532,7 +499,7 @@ public class MarketChartAgent extends Agent {
             }
         }
 
-        // ✅ NOUVEAU: Dessiner les marqueurs d'actualites
+        // Dessiner les marqueurs d'actualites
         private void drawNewsMarkers(Graphics2D g, List<NewsMarker> news, 
                                     int left, int top, int plotW, int plotH,
                                     long tMin, long tMax) {
